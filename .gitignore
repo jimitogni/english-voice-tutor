@@ -1,4 +1,5 @@
 .env
+.env.homelab
 .venv/
 venv/
 env/
@@ -8,6 +9,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+web/node_modules/
+web/dist/
+web/.vite/
+web/.env
 
 data/conversations/*
 !data/conversations/.gitkeep

@@ -21,8 +21,6 @@ RUN python -m pip install --upgrade pip \
 
 COPY app ./app
 COPY scripts ./scripts
-COPY ui ./ui
-COPY web ./web
 COPY README.md ./
 COPY .env.example ./
 

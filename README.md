@@ -17,6 +17,8 @@ Microphone
 The current version records from your microphone, transcribes the audio with
 `faster-whisper`, sends the text to a local Ollama model, prints the tutor's
 response, streams text/audio when enabled, and can speak the answer with Piper TTS.
+It also includes a FastAPI backend and a React frontend for a more structured
+local web interface.
 
 ## Current Phase
 
@@ -42,6 +44,8 @@ Implemented through Phase 6:
 - Sentence-by-sentence Piper TTS
 - Lightweight pronunciation feedback
 - Streamlit web UI
+- FastAPI backend for browser and future mobile clients
+- React frontend with fixed sidebar, scrollable chat, bottom voice dock, and auto-scroll
 - Docker Compose web stack
 - Optional JSON conversation saving
 - Ollama check script
@@ -57,6 +61,7 @@ Implemented through Phase 6:
 - PortAudio runtime libraries for `sounddevice`
 - Piper TTS and a downloaded Piper voice model
 - An audio playback tool such as `aplay`
+- Node.js 18+ if you want to run the React frontend in development mode
 
 ## Setup
 
@@ -69,6 +74,15 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 cp .env.example .env
+```
+
+For the React frontend, install Node.js 18 or newer. On Debian/Ubuntu you can
+use your preferred Node installer, for example `nvm`, NodeSource packages, or
+your distro package if it is recent enough:
+
+```bash
+node --version
+npm --version
 ```
 
 On some Debian/Ubuntu Python 3.13 installs, the virtual environment may have
@@ -570,37 +584,169 @@ or quiz you on those words when useful. The list is stored locally at:
 data/vocabulary/focus_words.json
 ```
 
-## Docker Compose
+## FastAPI + React Web UI
 
-The repository includes a Dockerfile and `docker-compose.yml` for a local web
-stack with Ollama and the Streamlit UI:
-
-```bash
-docker compose up --build
-```
-
-Then open:
+The newer web interface separates the local backend from the browser frontend:
 
 ```text
-http://localhost:8501
+Browser / React
+  -> FastAPI
+  -> faster-whisper / Ollama / Piper
+  -> generated WAV response
+  -> Browser audio player
 ```
 
-Pull the model inside the Ollama container:
+Start the FastAPI backend from the project root:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2:3b
+source .venv/bin/activate
+python -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+Or use the helper script:
+
+```bash
+python scripts/run_api.py
+```
+
+Open the API docs at:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+In another terminal, start the React frontend:
+
+```bash
+cd web
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+The React UI includes:
+
+- a fixed left sidebar for tutor mode, Ollama model, mapped Piper voice, TTS toggle, memory, and focus words
+- a scrollable chat area with automatic scroll to the latest message
+- a fixed bottom voice dock with start/stop recording and typed input
+- browser silence detection that stops recording and sends the audio automatically
+- automatic playback of the generated Piper response when browser autoplay allows it
+- visible model and voice labels inside the assistant messages
+
+Build the React app for production:
+
+```bash
+cd web
+npm run build
+```
+
+After a build, FastAPI serves the compiled frontend at:
+
+```text
+http://127.0.0.1:8000/app
+```
+
+## Homelab Docker Compose
+
+The homelab deployment runs the newer FastAPI + React architecture:
+
+```text
+React / Nginx container
+  -> FastAPI API container
+  -> Ollama container
+  -> mounted ./models and ./data folders
+```
+
+Services:
+
+- `web`: Nginx serves the built React app and proxies `/api` to FastAPI.
+- `api`: FastAPI runs STT, tutor orchestration, Piper TTS, focus words, and conversation saving.
+- `ollama`: Ollama stores local LLM models in a named Docker volume.
 
 Persistent paths:
 
-- Ollama models live in the named Docker volume `ollama`
-- app audio/conversation data is mounted from `./data`
-- Piper voice models are mounted from `./models`
+- Ollama models: Docker volume `ollama`
+- Piper voice models: `./models`
+- conversations, vocabulary, generated audio, uploaded audio: `./data`
 
-Terminal live microphone access inside a container is Linux-specific and needs
-extra device mapping. The Streamlit browser recorder captures audio in your
-browser and uploads the recording to the app, so it can still work through
-Docker Compose on `localhost` when browser microphone permission is allowed.
+On a fresh Debian/Ubuntu homelab server, install Docker first:
+
+```bash
+scripts/homelab_install_docker.sh
+```
+
+Deploy the app:
+
+```bash
+scripts/homelab_deploy.sh
+```
+
+The deploy script:
+
+- creates `.env.homelab` from `.env.homelab.example` if needed
+- creates `data/` and `models/` folders
+- downloads the Lessac, Amy, and Ryan Piper voices
+- builds the API and React containers
+- starts Ollama, API, and web services
+- pulls `OLLAMA_MODEL` plus `EXTRA_OLLAMA_MODELS`
+- runs a health check
+
+Default local homelab URLs:
+
+```text
+http://localhost:8080        React UI
+http://localhost:8000/docs   FastAPI docs
+http://localhost:11434       Ollama API
+```
+
+From another computer on your LAN, use your server IP:
+
+```text
+http://YOUR_SERVER_IP:8080
+```
+
+Important: browser microphone access usually requires `localhost` or HTTPS.
+If you open the app from another machine through plain `http://SERVER_IP:8080`,
+the browser may block microphone access. Use one of these:
+
+- HTTPS through Traefik, Caddy, Nginx Proxy Manager, or another reverse proxy
+- an SSH tunnel:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 user@YOUR_SERVER_IP
+```
+
+Then open this on your laptop:
+
+```text
+http://127.0.0.1:8080
+```
+
+Useful homelab commands:
+
+```bash
+scripts/homelab_health.sh
+scripts/homelab_logs.sh
+docker compose --env-file .env.homelab ps
+docker compose --env-file .env.homelab down
+```
+
+Edit `.env.homelab` to change ports, models, VAD settings, identity, or STT/TTS
+settings:
+
+```env
+WEB_PORT=8080
+API_PORT=8000
+OLLAMA_PORT=11434
+OLLAMA_MODEL=llama3.2:3b
+EXTRA_OLLAMA_MODELS=qwen3:4b gemma3:4b
+```
 
 ## Troubleshooting
 
@@ -749,6 +895,39 @@ sudo apt install alsa-utils
 The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 `sounddevice` playback.
 
+### React frontend command not found
+
+If `npm` or `node` is missing, install Node.js 18 or newer, then run:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The Python backend still works without Node:
+
+```bash
+python -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+### React frontend cannot reach the API
+
+Make sure FastAPI is running on port 8000:
+
+```bash
+curl http://127.0.0.1:8000/api/status
+```
+
+If you use another backend URL, set it in `web/.env`:
+
+```env
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+For the default Vite development setup, `VITE_API_BASE_URL` can stay empty
+because Vite proxies `/api` to `http://127.0.0.1:8000`.
+
 ## Quality And Privacy Notes
 
 - The app uses local Ollama, local `faster-whisper`, and local Piper TTS.
@@ -761,8 +940,10 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
   try again.
 - If TTS fails, the app disables speech output for that run and continues in
   text-only mode.
-- Streaming, VAD, pronunciation notes, Docker Compose, and Streamlit are local
+- Streaming, VAD, pronunciation notes, Docker Compose, Streamlit, and React are local
   features; they do not introduce paid API usage.
+- FastAPI and React are local development components; the LLM, STT, and TTS
+  still run through Ollama, faster-whisper, and Piper.
 
 ## Roadmap
 
@@ -771,19 +952,20 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 3. Phase 3: Piper TTS and audio playback
 4. Phase 4: richer JSON session saving and progress metadata
 5. Phase 5: tutor modes for free conversation, interview practice, and vocabulary
-6. Phase 6: latency improvements, streaming responses, voice activity detection, pronunciation notes, Docker Compose, and Streamlit UI
+6. Phase 6: latency improvements, streaming responses, voice activity detection, pronunciation notes, Docker Compose, Streamlit UI, and FastAPI + React UI
 
 ## Implemented Advanced Features
 
-- Voice activity detection: energy-based silence detection in the terminal and
-  browser Streamlit recorder.
+- Voice activity detection: energy-based silence detection in the terminal,
+  Streamlit browser recorder, and React voice dock.
 - Streaming LLM responses: Ollama streaming chunks in terminal and Streamlit.
 - Streaming TTS: sentence-by-sentence Piper synthesis in the terminal.
 - Pronunciation feedback: lightweight notes from Whisper segment confidence and
   silence probability.
-- Docker Compose: Ollama plus Streamlit UI with mounted model/data folders.
-- Web interface: Streamlit UI for typed chat, silence-based browser microphone
-  recording, audio upload, mode selection, and generated audio playback.
+- Docker Compose: homelab stack with Ollama, FastAPI, React/Nginx, and mounted model/data folders.
+- Web interfaces: Streamlit UI and React UI for typed chat, silence-based
+  browser microphone recording, mode/model selection, focus words, and generated
+  audio playback.
 
 ## Future Version Ideas
 
@@ -792,7 +974,8 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 - Make TTS playback concurrent so sentence synthesis does not pause LLM stream
   consumption.
 - Add phoneme-level pronunciation scoring and target phrase comparison.
-- Add FastAPI endpoints for a cleaner frontend or mobile client.
+- Add Server-Sent Events or WebSockets for token-by-token streaming in the React UI.
+- Add HTTPS reverse-proxy examples for Caddy, Traefik, and Nginx Proxy Manager.
 - Add persistent learner profiles, vocabulary review, and progress charts.
 
 ## Development Notes
