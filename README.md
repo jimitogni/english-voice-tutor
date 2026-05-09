@@ -14,7 +14,7 @@ Microphone
   -> Speaker
 ```
 
-The current version records from your microphone, transcribes the WAV file with
+The current version records from your microphone, transcribes the audio with
 `faster-whisper`, sends the text to a local Ollama model, prints the tutor's
 response, streams text/audio when enabled, and can speak the answer with Piper TTS.
 
@@ -37,6 +37,7 @@ Implemented through Phase 6:
 - Audio playback through `aplay`, `paplay`, `pw-play`, `ffplay`, or `sounddevice`
 - Tutor modes for free conversation, interview practice, and vocabulary practice
 - Energy-based voice activity detection
+- Browser recording with automatic stop after silence in Streamlit
 - Ollama streaming responses
 - Sentence-by-sentence Piper TTS
 - Lightweight pronunciation feedback
@@ -231,6 +232,10 @@ The app reads these values from `.env`:
 ```env
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2:3b
+ASSISTANT_NAME=Jarvis
+USER_DISPLAY_NAME=Jimi Jeday Marster
+CONVERSATION_HISTORY_TURNS=40
+FOCUS_WORDS_LIMIT=10
 STT_MODEL_SIZE=base
 STT_LANGUAGE=en
 STT_DEVICE=cpu
@@ -239,10 +244,10 @@ PRONUNCIATION_FEEDBACK=true
 RECORD_SECONDS=8
 RECORD_MODE=fixed
 SAMPLE_RATE=16000
-VAD_ENERGY_THRESHOLD=0.02
-VAD_SILENCE_SECONDS=1.0
+VAD_ENERGY_THRESHOLD=0.015
+VAD_SILENCE_SECONDS=2.2
 VAD_MIN_SPEECH_SECONDS=0.4
-VAD_MAX_SECONDS=12
+VAD_MAX_SECONDS=30
 VAD_CHUNK_MS=30
 LLM_STREAM=true
 TTS_ENGINE=piper
@@ -253,6 +258,19 @@ PIPER_CONFIG_PATH=./models/piper/en_US-lessac-medium.onnx.json
 SAVE_CONVERSATIONS=true
 ```
 
+`ASSISTANT_NAME` tells the tutor what name to respond to. With the default
+configuration, when you say "Jarvis", the tutor understands you are talking to
+it. `USER_DISPLAY_NAME` is used so new sessions greet you by name.
+
+`CONVERSATION_HISTORY_TURNS` controls how many recent user/assistant turns are
+sent back to the LLM as short-term context. The default is now 40, increased
+from the earlier MVP value of 8. Higher values give Jarvis more session memory,
+but very high values can make local models slower or exceed their context
+window.
+
+`FOCUS_WORDS_LIMIT` controls how many fixed practice words or expressions you
+can keep in the Streamlit sidebar. The default is 10.
+
 ## Conversation Memory
 
 The app keeps recent turns in memory and can save sessions to:
@@ -260,6 +278,15 @@ The app keeps recent turns in memory and can save sessions to:
 ```text
 data/conversations/
 ```
+
+By default, the LLM receives the latest 40 turns from the current session:
+
+```env
+CONVERSATION_HISTORY_TURNS=40
+```
+
+Saved JSON files still store the whole session, while the active LLM context uses
+the latest configured number of turns.
 
 Each saved turn includes:
 
@@ -326,16 +353,22 @@ RECORD_MODE=vad
 ```
 
 `fixed` records for `RECORD_SECONDS`. `vad` uses a simple local energy
-threshold and stops after sustained silence. Tune these values if recording cuts
-off too early or waits too long:
+threshold and stops after sustained silence. The Streamlit browser recorder also
+uses these silence settings, so one set of values controls both terminal and web
+voice capture. Tune these values if recording cuts off too early or waits too
+long:
 
 ```env
-VAD_ENERGY_THRESHOLD=0.02
-VAD_SILENCE_SECONDS=1.0
+VAD_ENERGY_THRESHOLD=0.015
+VAD_SILENCE_SECONDS=2.2
 VAD_MIN_SPEECH_SECONDS=0.4
-VAD_MAX_SECONDS=12
+VAD_MAX_SECONDS=30
 VAD_CHUNK_MS=30
 ```
+
+In Streamlit, open the sidebar's "Voice detection" panel to tune these values
+without editing `.env`. If Jarvis cuts you off, increase "Pause before
+auto-send". If quiet words are missed, lower "Voice threshold".
 
 ## Streaming
 
@@ -480,15 +513,38 @@ http://localhost:8501
 The UI supports:
 
 - tutor mode selection
+- Ollama model selection for installed local models
 - typed chat
-- click-to-record browser microphone input
+- a focus-words panel for up to 10 words or expressions you want to practice
+- browser microphone recording with automatic stop after silence
 - streaming Ollama responses
-- optional audio-file upload for STT
-- browser playback of generated Piper WAV files
+- optional audio-file upload for STT, including WAV, MP3, M4A, WEBM, and OGG
+- automatic browser playback of generated Piper WAV files
 
-Use the sidebar's "Record your voice" widget, then click "Send recorded voice".
-The app transcribes your speech, sends it to the local LLM, generates a Piper WAV
-answer, and plays it in the browser when browser audio is enabled.
+Use the "Voice" recorder. Click "Start listening", speak naturally, then pause.
+The browser detects silence, stops recording, transcribes your speech, sends it
+to the local LLM, generates a Piper WAV answer, and plays it in the browser when
+browser audio is enabled. The "Stop now" button is still there as a manual
+fallback.
+
+Use the sidebar's "Ollama model" selector to switch between installed local
+models during a Streamlit session. The default still comes from `OLLAMA_MODEL`
+in `.env`. The current model is also shown near the top of the page and inside
+each assistant message, so you can compare responses later.
+
+Leave "Autoplay answer audio" enabled to hear the response without pressing play.
+If your browser blocks autoplay with sound, the audio player remains visible so
+you can press play manually. If the browser blocks microphone access, allow
+microphone permission for `localhost` or use the audio upload/typed chat
+fallback.
+
+Use the sidebar's "Focus Words" panel to add words or expressions you want to
+practice more. Jarvis sees this list on every response and will naturally reuse
+or quiz you on those words when useful. The list is stored locally at:
+
+```text
+data/vocabulary/focus_words.json
+```
 
 ## Docker Compose
 
@@ -517,9 +573,10 @@ Persistent paths:
 - app audio/conversation data is mounted from `./data`
 - Piper voice models are mounted from `./models`
 
-Containerized live microphone access is Linux-specific and needs extra device
-mapping, so Docker Compose is aimed at the Streamlit typed/audio-upload workflow
-first.
+Terminal live microphone access inside a container is Linux-specific and needs
+extra device mapping. The Streamlit browser recorder captures audio in your
+browser and uploads the recording to the app, so it can still work through
+Docker Compose on `localhost` when browser microphone permission is allowed.
 
 ## Troubleshooting
 
@@ -694,15 +751,15 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 
 ## Implemented Advanced Features
 
-- Voice activity detection: energy-based silence detection with configurable
-  thresholds.
+- Voice activity detection: energy-based silence detection in the terminal and
+  browser Streamlit recorder.
 - Streaming LLM responses: Ollama streaming chunks in terminal and Streamlit.
 - Streaming TTS: sentence-by-sentence Piper synthesis in the terminal.
 - Pronunciation feedback: lightweight notes from Whisper segment confidence and
   silence probability.
 - Docker Compose: Ollama plus Streamlit UI with mounted model/data folders.
-- Web interface: Streamlit UI for typed chat, click-to-record microphone input,
-  audio upload, mode selection, and generated audio playback.
+- Web interface: Streamlit UI for typed chat, silence-based browser microphone
+  recording, audio upload, mode selection, and generated audio playback.
 
 ## Future Version Ideas
 

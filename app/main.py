@@ -6,6 +6,7 @@ from typing import cast
 
 from app.audio_recorder import AudioRecorder, AudioRecordingError
 from app.config import AppConfig, ConfigError, load_config
+from app.focus_words import FocusWordsError, FocusWordsStore
 from app.llm_client import OllamaError, OllamaModelNotFoundError, OllamaClient
 from app.memory import ConversationMemory, ConversationMemoryError
 from app.prompts import TutorMode, available_modes, get_mode_definition, mode_choices
@@ -203,7 +204,11 @@ def get_tutor_response(
 def print_session_header(
     *,
     input_mode: str,
+    config: AppConfig,
     model: str,
+    assistant_name: str,
+    user_display_name: str,
+    conversation_history_turns: int,
     mode: TutorMode,
     tts_engine: TextToSpeechEngine | None,
     tts_name: str,
@@ -214,7 +219,15 @@ def print_session_header(
 ) -> None:
     definition = get_mode_definition(mode)
     print(f"\nEnglish Voice Tutor - {input_mode} mode")
+    print(f"Assistant: {assistant_name}")
+    print(f"User: {user_display_name}")
     print(f"Model: {model}")
+    print(f"Context memory: last {conversation_history_turns} turns")
+    try:
+        focus_count = len(FocusWordsStore(config).list_words())
+    except FocusWordsError:
+        focus_count = 0
+    print(f"Focus words: {focus_count}")
     print(f"Tutor mode: {definition.label}")
     print(f"Focus: {definition.description}")
     print(f"TTS: {'off' if tts_engine is None else tts_name}")
@@ -284,7 +297,11 @@ def run_typed_loop(
 
     print_session_header(
         input_mode="typed",
+        config=config,
         model=config.ollama_model,
+        assistant_name=config.assistant_name,
+        user_display_name=config.user_display_name,
+        conversation_history_turns=config.conversation_history_turns,
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,
@@ -355,7 +372,11 @@ def run_voice_loop(
 
     print_session_header(
         input_mode="voice",
+        config=config,
         model=config.ollama_model,
+        assistant_name=config.assistant_name,
+        user_display_name=config.user_display_name,
+        conversation_history_turns=config.conversation_history_turns,
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,

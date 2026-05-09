@@ -22,9 +22,9 @@ class ConversationTurn:
 
 
 class ConversationMemory:
-    def __init__(self, config: AppConfig | None = None, max_history_turns: int = 8) -> None:
+    def __init__(self, config: AppConfig | None = None, max_history_turns: int | None = None) -> None:
         self.config = config or load_config()
-        self.max_history_turns = max_history_turns
+        self.max_history_turns = max_history_turns or self.config.conversation_history_turns
         self.session_id = file_timestamp()
         self.started_at = utc_timestamp()
         self.turns: list[ConversationTurn] = []
@@ -64,6 +64,9 @@ class ConversationMemory:
             "started_at": self.started_at,
             "saved_at": utc_timestamp(),
             "turn_count": len(self.turns),
+            "assistant_name": self.config.assistant_name,
+            "user_display_name": self.config.user_display_name,
+            "max_history_turns": self.max_history_turns,
             "turns": [asdict(turn) for turn in self.turns],
         }
         temp_path = output_path.with_suffix(".tmp")

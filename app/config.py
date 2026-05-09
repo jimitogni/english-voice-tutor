@@ -28,6 +28,10 @@ class AppConfig:
     project_root: Path
     ollama_base_url: str
     ollama_model: str
+    assistant_name: str
+    user_display_name: str
+    conversation_history_turns: int
+    focus_words_limit: int
     stt_model_size: str
     stt_language: str
     stt_device: str
@@ -51,6 +55,8 @@ class AppConfig:
     conversations_dir: Path
     audio_inputs_dir: Path
     audio_outputs_dir: Path
+    vocabulary_dir: Path
+    focus_words_path: Path
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -130,6 +136,10 @@ def load_config() -> AppConfig:
         project_root=project_root,
         ollama_base_url=_get_non_empty("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
         ollama_model=_get_non_empty("OLLAMA_MODEL", "llama3.2:3b"),
+        assistant_name=_get_non_empty("ASSISTANT_NAME", "Jarvis"),
+        user_display_name=_get_non_empty("USER_DISPLAY_NAME", "Jimi Jeday Marster"),
+        conversation_history_turns=_get_positive_int("CONVERSATION_HISTORY_TURNS", 40),
+        focus_words_limit=_get_positive_int("FOCUS_WORDS_LIMIT", 10),
         stt_model_size=_get_choice("STT_MODEL_SIZE", "base", STT_MODEL_SIZES),
         stt_language=_get_non_empty("STT_LANGUAGE", "en"),
         stt_device=_get_choice("STT_DEVICE", "cpu", STT_DEVICES),
@@ -159,4 +169,6 @@ def load_config() -> AppConfig:
         conversations_dir=project_root / "data" / "conversations",
         audio_inputs_dir=project_root / "data" / "audio_inputs",
         audio_outputs_dir=project_root / "data" / "audio_outputs",
+        vocabulary_dir=project_root / "data" / "vocabulary",
+        focus_words_path=project_root / "data" / "vocabulary" / "focus_words.json",
     )

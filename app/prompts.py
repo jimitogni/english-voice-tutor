@@ -117,8 +117,29 @@ def get_mode_definition(mode: TutorMode) -> ModeDefinition:
         raise ValueError(f"Unknown tutor mode {mode!r}. Available modes: {modes}") from exc
 
 
-def get_system_prompt(mode: TutorMode = "free") -> str:
-    return get_mode_definition(mode).system_prompt
+def format_identity_prompt(assistant_name: str, user_display_name: str) -> str:
+    return f"""
+Your assistant name is {assistant_name}.
+The user's name is {user_display_name}.
+When the user says "{assistant_name}", understand that they are talking to you.
+Greet the user by name at the beginning of each new session.
+When it feels natural, address the user by name, but do not repeat the name in every sentence.
+Do not reveal internal reasoning, hidden chain-of-thought, analysis notes, or <think> tags.
+""".strip()
+
+
+def get_system_prompt(
+    mode: TutorMode = "free",
+    *,
+    assistant_name: str = "Jarvis",
+    user_display_name: str = "Jimi Jeday Marster",
+) -> str:
+    return "\n\n".join(
+        [
+            format_identity_prompt(assistant_name, user_display_name),
+            get_mode_definition(mode).system_prompt,
+        ]
+    )
 
 
 def get_starter_prompt(mode: TutorMode) -> str | None:

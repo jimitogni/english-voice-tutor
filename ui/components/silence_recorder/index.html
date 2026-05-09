@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        color: #262730;
+        background: transparent;
+      }
+
+      .recorder {
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        border-radius: 8px;
+        padding: 0.75rem;
+        background: rgba(255, 255, 255, 0.65);
+      }
+
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 1px solid rgba(49, 51, 63, 0.24);
+        border-radius: 6px;
+        padding: 0.45rem 0.7rem;
+        background: #ffffff;
+        color: #262730;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: rgba(255, 75, 75, 0.75);
+        color: #d92b2b;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .primary {
+        border-color: #ff4b4b;
+        background: #ff4b4b;
+        color: #ffffff;
+      }
+
+      .primary:hover:not(:disabled) {
+        color: #ffffff;
+        background: #e63f3f;
+      }
+
+      .status {
+        margin-top: 0.65rem;
+        font-size: 0.9rem;
+        line-height: 1.35;
+      }
+
+      .meter {
+        height: 8px;
+        margin-top: 0.6rem;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(49, 51, 63, 0.12);
+      }
+
+      .meter-fill {
+        display: block;
+        width: 0%;
+        height: 100%;
+        border-radius: inherit;
+        background: #ff4b4b;
+        transition: width 80ms linear;
+      }
+
+      .settings {
+        margin-top: 0.55rem;
+        color: rgba(49, 51, 63, 0.72);
+        font-size: 0.78rem;
+        line-height: 1.35;
+      }
+
+      .error {
+        color: #b00020;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          color: #fafafa;
+        }
+
+        .recorder {
+          border-color: rgba(250, 250, 250, 0.2);
+          background: rgba(14, 17, 23, 0.35);
+        }
+
+        button {
+          border-color: rgba(250, 250, 250, 0.22);
+          background: #262730;
+          color: #fafafa;
+        }
+
+        .settings {
+          color: rgba(250, 250, 250, 0.72);
+        }
+
+        .meter {
+          background: rgba(250, 250, 250, 0.14);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="recorder">
+      <div class="controls">
+        <button id="startButton" class="primary" type="button">Start listening</button>
+        <button id="stopButton" type="button" disabled>Stop now</button>
+      </div>
+      <div id="status" class="status">Click Start, speak, then pause. Recording stops after silence.</div>
+      <div class="meter" aria-hidden="true">
+        <span id="meterFill" class="meter-fill"></span>
+      </div>
+      <div id="settings" class="settings"></div>
+    </div>
+
+    <script>
+      const startButton = document.getElementById("startButton");
+      const stopButton = document.getElementById("stopButton");
+      const statusEl = document.getElementById("status");
+      const settingsEl = document.getElementById("settings");
+      const meterFill = document.getElementById("meterFill");
+
+      let config = {
+        sampleRate: 16000,
+        energyThreshold: 0.02,
+        silenceSeconds: 1.0,
+        minSpeechSeconds: 0.4,
+        maxSeconds: 12.0,
+      };
+
+      let mediaStream = null;
+      let mediaRecorder = null;
+      let audioContext = null;
+      let analyser = null;
+      let waveform = null;
+      let chunks = [];
+      let isRecording = false;
+      let animationId = null;
+      let startedAt = 0;
+      let speechStartedAt = null;
+      let lastSpeechAt = null;
+      let silenceStartedAt = null;
+      let stopReason = "manual";
+      let stopWasAutomatic = false;
+      let recorderMimeType = "";
+
+      function sendMessageToStreamlitClient(type, data) {
+        const message = Object.assign({ isStreamlitMessage: true, type }, data);
+        window.parent.postMessage(message, "*");
+      }
+
+      function componentReady() {
+        sendMessageToStreamlitClient("streamlit:componentReady", { apiVersion: 1 });
+      }
+
+      function setFrameHeight(height) {
+        sendMessageToStreamlitClient("streamlit:setFrameHeight", { height });
+      }
+
+      function setComponentValue(value) {
+        sendMessageToStreamlitClient("streamlit:setComponentValue", {
+          value,
+          dataType: "json",
+        });
+      }
+
+      function seconds(value) {
+        return Number(value).toFixed(1);
+      }
+
+      function updateSettingsText() {
+        settingsEl.textContent =
+          `Silence stop: ${seconds(config.silenceSeconds)}s | ` +
+          `max: ${seconds(config.maxSeconds)}s | ` +
+          `threshold: ${config.energyThreshold}`;
+      }
+
+      function setStatus(text, isError = false) {
+        statusEl.textContent = text;
+        statusEl.classList.toggle("error", isError);
+      }
+
+      function getSupportedMimeType() {
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+          "audio/mp4",
+        ];
+
+        if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) {
+          return "";
+        }
+
+        return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
+      }
+
+      function filenameForMimeType(mimeType) {
+        if (mimeType.includes("ogg")) {
+          return "browser_vad_recording.ogg";
+        }
+        if (mimeType.includes("mp4")) {
+          return "browser_vad_recording.m4a";
+        }
+        if (mimeType.includes("wav")) {
+          return "browser_vad_recording.wav";
+        }
+        return "browser_vad_recording.webm";
+      }
+
+      function cleanUpRecordingResources() {
+        if (animationId) {
+          cancelAnimationFrame(animationId);
+          animationId = null;
+        }
+        if (mediaStream) {
+          mediaStream.getTracks().forEach((track) => track.stop());
+          mediaStream = null;
+        }
+        if (audioContext) {
+          audioContext.close().catch(() => {});
+          audioContext = null;
+        }
+        analyser = null;
+        waveform = null;
+        mediaRecorder = null;
+      }
+
+      function resetButtons() {
+        startButton.disabled = false;
+        stopButton.disabled = true;
+        startButton.textContent = "Start listening";
+      }
+
+      function emitError(message) {
+        const id = `error_${Date.now()}`;
+        setStatus(message, true);
+        setComponentValue({ id, error: message });
+      }
+
+      function finishRecording() {
+        const elapsedSeconds = Math.max(0, (performance.now() - startedAt) / 1000);
+        const mimeType = recorderMimeType || "audio/webm";
+        cleanUpRecordingResources();
+        resetButtons();
+        meterFill.style.width = "0%";
+        isRecording = false;
+
+        if (!chunks.length) {
+          emitError("The browser did not return any audio. Check microphone permissions.");
+          return;
+        }
+
+        const blob = new Blob(chunks, { type: mimeType });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const id = `${Date.now()}_${blob.size}`;
+          setStatus(
+            stopWasAutomatic
+              ? "Stopped after silence. Sending audio to Jarvis..."
+              : "Stopped. Sending audio to Jarvis..."
+          );
+          setComponentValue({
+            id,
+            name: filenameForMimeType(blob.type || mimeType),
+            mime_type: blob.type || mimeType,
+            data_url: reader.result,
+            duration_seconds: elapsedSeconds,
+            auto_stopped: stopWasAutomatic,
+            stop_reason: stopReason,
+          });
+        };
+        reader.onerror = () => {
+          emitError("Could not read the browser recording.");
+        };
+        reader.readAsDataURL(blob);
+      }
+
+      function stopRecording(automatic, reason) {
+        if (!isRecording || !mediaRecorder) {
+          return;
+        }
+
+        stopWasAutomatic = automatic;
+        stopReason = reason;
+        setStatus(automatic ? "Silence detected. Preparing audio..." : "Stopping recording...");
+
+        if (mediaRecorder.state !== "inactive") {
+          mediaRecorder.stop();
+        }
+      }
+
+      function analyzeAudioLevel() {
+        if (!isRecording || !analyser || !waveform) {
+          return;
+        }
+
+        analyser.getFloatTimeDomainData(waveform);
+        let total = 0;
+        for (let index = 0; index < waveform.length; index += 1) {
+          total += waveform[index] * waveform[index];
+        }
+
+        const rms = Math.sqrt(total / waveform.length);
+        const now = performance.now();
+        const elapsedSeconds = (now - startedAt) / 1000;
+        const levelPercent = Math.min(100, Math.round((rms / config.energyThreshold) * 45));
+        meterFill.style.width = `${levelPercent}%`;
+
+        if (rms >= config.energyThreshold) {
+          if (speechStartedAt === null) {
+            speechStartedAt = now;
+          }
+          lastSpeechAt = now;
+          silenceStartedAt = null;
+        } else if (speechStartedAt !== null && silenceStartedAt === null) {
+          silenceStartedAt = now;
+        }
+
+        const speechSeconds =
+          speechStartedAt !== null && lastSpeechAt !== null
+            ? (lastSpeechAt - speechStartedAt) / 1000
+            : 0;
+
+        if (elapsedSeconds >= config.maxSeconds) {
+          stopRecording(true, "max_duration");
+          return;
+        }
+
+        if (
+          speechStartedAt !== null &&
+          silenceStartedAt !== null &&
+          speechSeconds >= config.minSpeechSeconds &&
+          (now - silenceStartedAt) / 1000 >= config.silenceSeconds
+        ) {
+          stopRecording(true, "silence");
+          return;
+        }
+
+        const waitingText =
+          speechStartedAt === null
+            ? "Listening... start speaking."
+            : `Listening... pause for ${seconds(config.silenceSeconds)}s to send.`;
+        setStatus(`${waitingText} ${seconds(elapsedSeconds)}s`);
+        animationId = requestAnimationFrame(analyzeAudioLevel);
+      }
+
+      async function startRecording() {
+        if (isRecording) {
+          return;
+        }
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          emitError("This browser does not expose microphone recording APIs.");
+          return;
+        }
+
+        if (!window.MediaRecorder) {
+          emitError("This browser does not support MediaRecorder audio capture.");
+          return;
+        }
+
+        chunks = [];
+        speechStartedAt = null;
+        lastSpeechAt = null;
+        silenceStartedAt = null;
+        stopReason = "manual";
+        stopWasAutomatic = false;
+        recorderMimeType = getSupportedMimeType();
+
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: config.sampleRate,
+            },
+          });
+
+          const recorderOptions = recorderMimeType ? { mimeType: recorderMimeType } : undefined;
+          mediaRecorder = new MediaRecorder(mediaStream, recorderOptions);
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              chunks.push(event.data);
+            }
+          };
+          mediaRecorder.onerror = () => {
+            emitError("The browser recorder failed while capturing audio.");
+            cleanUpRecordingResources();
+            resetButtons();
+            isRecording = false;
+          };
+          mediaRecorder.onstop = finishRecording;
+
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          audioContext = new AudioContextClass();
+          analyser = audioContext.createAnalyser();
+          analyser.fftSize = 1024;
+          waveform = new Float32Array(analyser.fftSize);
+          const source = audioContext.createMediaStreamSource(mediaStream);
+          source.connect(analyser);
+
+          startedAt = performance.now();
+          mediaRecorder.start(250);
+          isRecording = true;
+          startButton.disabled = true;
+          stopButton.disabled = false;
+          startButton.textContent = "Listening...";
+          setStatus("Listening... start speaking.");
+          animationId = requestAnimationFrame(analyzeAudioLevel);
+        } catch (error) {
+          cleanUpRecordingResources();
+          resetButtons();
+          isRecording = false;
+          const message =
+            error && error.name === "NotAllowedError"
+              ? "Microphone permission was denied. Allow microphone access in the browser."
+              : `Could not start microphone recording: ${error.message || error}`;
+          emitError(message);
+        }
+      }
+
+      startButton.addEventListener("click", startRecording);
+      stopButton.addEventListener("click", () => stopRecording(false, "manual"));
+
+      window.addEventListener("message", (event) => {
+        if (!event.data || event.data.type !== "streamlit:render") {
+          return;
+        }
+
+        const args = event.data.args || {};
+        config = {
+          sampleRate: Number(args.sample_rate || 16000),
+          energyThreshold: Number(args.energy_threshold || 0.02),
+          silenceSeconds: Number(args.silence_seconds || 1.0),
+          minSpeechSeconds: Number(args.min_speech_seconds || 0.4),
+          maxSeconds: Number(args.max_seconds || 12.0),
+        };
+        updateSettingsText();
+        setFrameHeight(156);
+      });
+
+      updateSettingsText();
+      componentReady();
+      setFrameHeight(156);
+    </script>
+  </body>
+</html>

@@ -133,7 +133,7 @@ class SpeechToTextEngine:
             text = " ".join(segment.text for segment in parsed_segments).strip()
         except Exception as exc:
             raise SpeechToTextError(
-                f"Could not transcribe {audio_file}. Make sure it is a readable WAV file."
+                f"Could not transcribe {audio_file}. Make sure it is a readable audio file."
             ) from exc
 
         if not text:
