@@ -481,12 +481,14 @@ The UI supports:
 
 - tutor mode selection
 - typed chat
+- click-to-record browser microphone input
 - streaming Ollama responses
 - optional audio-file upload for STT
 - browser playback of generated Piper WAV files
 
-Browser microphone capture is not implemented yet. For live microphone practice,
-use the terminal app.
+Use the sidebar's "Record your voice" widget, then click "Send recorded voice".
+The app transcribes your speech, sends it to the local LLM, generates a Piper WAV
+answer, and plays it in the browser when browser audio is enabled.
 
 ## Docker Compose
 
@@ -699,8 +701,8 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 - Pronunciation feedback: lightweight notes from Whisper segment confidence and
   silence probability.
 - Docker Compose: Ollama plus Streamlit UI with mounted model/data folders.
-- Web interface: Streamlit UI for typed chat, audio upload, mode selection, and
-  generated audio playback.
+- Web interface: Streamlit UI for typed chat, click-to-record microphone input,
+  audio upload, mode selection, and generated audio playback.
 
 ## Future Version Ideas
 
