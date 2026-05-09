@@ -1,0 +1,6 @@
+python-dotenv>=1.0.1
+requests>=2.31.0
+numpy>=1.26.0
+sounddevice>=0.4.6
+faster-whisper>=1.0.0
+piper-tts>=1.4.2
