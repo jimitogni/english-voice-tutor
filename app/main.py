@@ -13,6 +13,7 @@ from app.prompts import TutorMode, available_modes, get_mode_definition, mode_ch
 from app.stt import SpeechToTextEngine, SpeechToTextError
 from app.tutor_agent import EnglishTutorAgent
 from app.tts import TextToSpeechEngine, TextToSpeechError
+from app.voice_profiles import apply_voice_profile, voice_profile_for_model
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -212,6 +213,7 @@ def print_session_header(
     mode: TutorMode,
     tts_engine: TextToSpeechEngine | None,
     tts_name: str,
+    tts_voice: str,
     stream_response: bool,
     stream_tts: bool,
     record_mode: str | None = None,
@@ -231,6 +233,8 @@ def print_session_header(
     print(f"Tutor mode: {definition.label}")
     print(f"Focus: {definition.description}")
     print(f"TTS: {'off' if tts_engine is None else tts_name}")
+    if tts_engine is not None:
+        print(f"TTS voice: {tts_voice}")
     print(f"LLM streaming: {'on' if stream_response else 'off'}")
     if tts_engine is not None:
         print(f"Streaming TTS: {'on' if stream_tts else 'off'}")
@@ -305,6 +309,7 @@ def run_typed_loop(
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,
+        tts_voice=voice_profile_for_model(config, config.ollama_model).label,
         stream_response=stream_response,
         stream_tts=stream_tts,
     )
@@ -380,6 +385,7 @@ def run_voice_loop(
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,
+        tts_voice=voice_profile_for_model(config, config.ollama_model).label,
         stream_response=stream_response,
         stream_tts=stream_tts,
         record_mode=selected_record_mode,
@@ -453,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Configuration error: {exc}")
         return 2
 
+    config = apply_voice_profile(config, voice_profile_for_model(config, config.ollama_model))
     mode = choose_mode(args.mode)
     stream_response = config.llm_stream and not args.no_stream
     stream_tts = config.stream_tts and not args.no_stream_tts

@@ -438,6 +438,28 @@ wget -O models/piper/en_US-lessac-medium.onnx.json \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 ```
 
+This project can also map one Piper voice to each local LLM model. The current
+default mapping is:
+
+```text
+llama3.2:3b -> en_US-lessac-medium
+qwen3:4b    -> en_US-amy-medium
+gemma3:4b   -> en_US-ryan-medium
+```
+
+Download the extra mapped voices with:
+
+```bash
+wget -O models/piper/en_US-amy-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
+wget -O models/piper/en_US-amy-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+wget -O models/piper/en_US-ryan-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+wget -O models/piper/en_US-ryan-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
+```
+
 Test Piper directly:
 
 ```bash
@@ -514,6 +536,7 @@ The UI supports:
 
 - tutor mode selection
 - Ollama model selection for installed local models
+- automatic Piper voice mapping per selected LLM model
 - typed chat
 - a focus-words panel for up to 10 words or expressions you want to practice
 - browser microphone recording with automatic stop after silence
@@ -530,7 +553,8 @@ fallback.
 Use the sidebar's "Ollama model" selector to switch between installed local
 models during a Streamlit session. The default still comes from `OLLAMA_MODEL`
 in `.env`. The current model is also shown near the top of the page and inside
-each assistant message, so you can compare responses later.
+each assistant message, so you can compare responses later. The mapped Piper
+voice is shown alongside it.
 
 Leave "Autoplay answer audio" enabled to hear the response without pressing play.
 If your browser blocks autoplay with sound, the audio player remains visible so

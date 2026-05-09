@@ -23,6 +23,7 @@ from app.stt import SpeechToTextEngine, SpeechToTextError
 from app.tts import TextToSpeechEngine, TextToSpeechError
 from app.tutor_agent import EnglishTutorAgent
 from app.utils import ensure_directory, file_timestamp
+from app.voice_profiles import apply_voice_profile, voice_profile_for_model
 from ui.silence_recorder import BrowserRecording, silence_recorder
 
 
@@ -65,6 +66,8 @@ def render_history() -> None:
         with st.chat_message(message["role"]):
             if message["role"] == "assistant" and message.get("model"):
                 st.caption(f"LLM model: `{message['model']}`")
+            if message["role"] == "assistant" and message.get("voice"):
+                st.caption(f"TTS voice: {message['voice']}")
             st.write(message["content"])
             if message.get("audio_path"):
                 render_audio(message["audio_path"], autoplay=False)
@@ -188,9 +191,13 @@ def answer_with_agent(
     enable_tts: bool,
     autoplay_audio: bool,
     model_name: str,
+    voice_label: str,
+    config: AppConfig,
 ) -> tuple[str, str | None]:
     with st.chat_message("assistant"):
         st.caption(f"LLM model: `{model_name}`")
+        if enable_tts:
+            st.caption(f"TTS voice: {voice_label}")
         try:
             if stream_response:
                 chunks: list[str] = []
@@ -209,15 +216,14 @@ def answer_with_agent(
             st.error(f"Ollama error: {exc}")
             return "", None
 
-        audio_path = synthesize_for_browser(response_text) if enable_tts else None
+        audio_path = synthesize_for_browser(response_text, config) if enable_tts else None
         if audio_path:
             render_audio(audio_path, autoplay=autoplay_audio)
 
     return response_text, audio_path
 
 
-def synthesize_for_browser(text: str) -> str | None:
-    config = load_config()
+def synthesize_for_browser(text: str, config: AppConfig) -> str | None:
     if config.tts_engine in {"none", "off", "disabled"}:
         return None
 
@@ -308,6 +314,13 @@ def main() -> None:
                 f"Run `ollama pull {selected_model}`."
             )
         config = replace(config, ollama_model=selected_model)
+        selected_voice = voice_profile_for_model(config, config.ollama_model)
+        config = apply_voice_profile(config, selected_voice)
+        st.write(f"TTS voice: **{selected_voice.label}**")
+        if not selected_voice.is_available:
+            st.warning(
+                f"TTS voice files for {selected_voice.label} are missing in `models/piper/`."
+            )
 
         stream_response = st.toggle("Stream LLM response", value=config.llm_stream)
         enable_tts = st.toggle("Generate browser audio", value=config.tts_engine == "piper")
@@ -360,7 +373,10 @@ def main() -> None:
                 del st.session_state[key]
             st.rerun()
 
-    st.info(f"Current LLM model: `{config.ollama_model}`")
+    st.info(
+        f"Current LLM model: `{config.ollama_model}` | "
+        f"TTS voice: **{selected_voice.label}**"
+    )
 
     st.subheader("Voice")
     browser_recording = silence_recorder(
@@ -419,6 +435,8 @@ def main() -> None:
         enable_tts=enable_tts,
         autoplay_audio=autoplay_audio,
         model_name=config.ollama_model,
+        voice_label=selected_voice.label,
+        config=config,
     )
     if not response_text:
         return
@@ -429,6 +447,7 @@ def main() -> None:
             "content": response_text,
             "audio_path": audio_path,
             "model": config.ollama_model,
+            "voice": selected_voice.label if enable_tts else None,
         }
     )
 
