@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from app.config import AppConfig, load_config
 from app.llm_client import OllamaClient
 from app.memory import ConversationMemory
@@ -35,6 +37,27 @@ class EnglishTutorAgent:
             stt_model_name=stt_model_name,
         )
         return response
+
+    def reply_stream(
+        self,
+        user_text: str,
+        stt_model_name: str = "typed-input",
+    ) -> Iterator[str]:
+        messages = self.build_messages(user_text)
+        chunks: list[str] = []
+
+        for chunk in self.llm_client.chat_stream(messages):
+            chunks.append(chunk)
+            yield chunk
+
+        response = "".join(chunks).strip()
+        if response:
+            self.memory.add_turn(
+                user_text=user_text,
+                tutor_response=response,
+                model_name=self.config.ollama_model,
+                stt_model_name=stt_model_name,
+            )
 
     def start_session(self) -> str | None:
         starter_prompt = get_starter_prompt(self.mode)

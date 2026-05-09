@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import wave
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from uuid import uuid4
 
@@ -229,3 +231,28 @@ class TextToSpeechEngine:
         output_path = self.synthesize(text)
         self.play(output_path)
         return output_path
+
+    def iter_speech_chunks(self, text_chunks: Iterable[str]) -> Iterator[str]:
+        buffer = ""
+        sentence_pattern = re.compile(r"^(.+?[.!?])(\s+|$)", re.DOTALL)
+
+        for text_chunk in text_chunks:
+            buffer += text_chunk
+
+            while True:
+                match = sentence_pattern.match(buffer)
+                if match is None:
+                    break
+
+                sentence = match.group(1).strip()
+                buffer = buffer[match.end() :].lstrip()
+                if sentence:
+                    yield sentence
+
+        remainder = buffer.strip()
+        if remainder:
+            yield remainder
+
+    def speak_stream(self, text_chunks: Iterable[str]) -> Iterator[Path]:
+        for speech_chunk in self.iter_speech_chunks(text_chunks):
+            yield self.speak(speech_chunk)

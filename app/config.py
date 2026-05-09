@@ -16,6 +16,7 @@ TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 FALSE_VALUES = {"0", "false", "no", "n", "off"}
 STT_MODEL_SIZES = {"tiny", "base", "small", "medium"}
 STT_DEVICES = {"cpu", "cuda", "auto"}
+RECORD_MODES = {"fixed", "vad"}
 
 
 class ConfigError(ValueError):
@@ -31,9 +32,18 @@ class AppConfig:
     stt_language: str
     stt_device: str
     stt_compute_type: str
+    pronunciation_feedback: bool
     record_seconds: int
+    record_mode: str
     sample_rate: int
+    vad_energy_threshold: float
+    vad_silence_seconds: float
+    vad_min_speech_seconds: float
+    vad_max_seconds: float
+    vad_chunk_ms: int
+    llm_stream: bool
     tts_engine: str
+    stream_tts: bool
     piper_executable: str
     piper_model_path: Path
     piper_config_path: Path
@@ -78,6 +88,24 @@ def _get_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _get_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid float value for {name}: {value!r}") from exc
+
+
+def _get_positive_float(name: str, default: float) -> float:
+    value = _get_float(name, default)
+    if value <= 0:
+        raise ConfigError(f"{name} must be greater than zero. Got {value!r}.")
+    return value
+
+
 def _get_non_empty(name: str, default: str) -> str:
     value = os.getenv(name, default).strip()
     if not value:
@@ -106,9 +134,18 @@ def load_config() -> AppConfig:
         stt_language=_get_non_empty("STT_LANGUAGE", "en"),
         stt_device=_get_choice("STT_DEVICE", "cpu", STT_DEVICES),
         stt_compute_type=_get_non_empty("STT_COMPUTE_TYPE", "int8"),
+        pronunciation_feedback=_get_bool("PRONUNCIATION_FEEDBACK", True),
         record_seconds=_get_positive_int("RECORD_SECONDS", 8),
+        record_mode=_get_choice("RECORD_MODE", "fixed", RECORD_MODES),
         sample_rate=_get_positive_int("SAMPLE_RATE", 16000),
+        vad_energy_threshold=_get_positive_float("VAD_ENERGY_THRESHOLD", 0.02),
+        vad_silence_seconds=_get_positive_float("VAD_SILENCE_SECONDS", 1.0),
+        vad_min_speech_seconds=_get_positive_float("VAD_MIN_SPEECH_SECONDS", 0.4),
+        vad_max_seconds=_get_positive_float("VAD_MAX_SECONDS", 12.0),
+        vad_chunk_ms=_get_positive_int("VAD_CHUNK_MS", 30),
+        llm_stream=_get_bool("LLM_STREAM", True),
         tts_engine=_get_non_empty("TTS_ENGINE", "piper").lower(),
+        stream_tts=_get_bool("STREAM_TTS", True),
         piper_executable=_get_non_empty("PIPER_EXECUTABLE", "piper"),
         piper_model_path=resolve_project_path(
             project_root,

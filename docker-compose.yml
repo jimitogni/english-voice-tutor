@@ -1,0 +1,35 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+  tutor-web:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      STT_MODEL_SIZE: ${STT_MODEL_SIZE:-base}
+      STT_LANGUAGE: ${STT_LANGUAGE:-en}
+      STT_DEVICE: ${STT_DEVICE:-cpu}
+      STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8}
+      PRONUNCIATION_FEEDBACK: ${PRONUNCIATION_FEEDBACK:-true}
+      TTS_ENGINE: ${TTS_ENGINE:-piper}
+      PIPER_EXECUTABLE: piper
+      PIPER_MODEL_PATH: /app/models/piper/en_US-lessac-medium.onnx
+      PIPER_CONFIG_PATH: /app/models/piper/en_US-lessac-medium.onnx.json
+      SAVE_CONVERSATIONS: ${SAVE_CONVERSATIONS:-true}
+      LLM_STREAM: ${LLM_STREAM:-true}
+      STREAM_TTS: ${STREAM_TTS:-false}
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    depends_on:
+      - ollama
+
+volumes:
+  ollama:

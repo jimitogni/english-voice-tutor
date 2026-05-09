@@ -42,6 +42,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override RECORD_SECONDS for voice input.",
     )
     parser.add_argument(
+        "--record-mode",
+        choices=("fixed", "vad"),
+        default=None,
+        help="Override RECORD_MODE. Use `vad` to stop after detected silence.",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming LLM responses.",
+    )
+    parser.add_argument(
+        "--no-stream-tts",
+        action="store_true",
+        help="Disable sentence-by-sentence TTS while keeping normal TTS enabled.",
+    )
+    parser.add_argument(
         "--no-tts",
         action="store_true",
         help="Print tutor responses without generating or playing speech.",
@@ -134,6 +150,56 @@ def speak_or_continue(tts_engine: TextToSpeechEngine | None, text: str) -> bool:
     return True
 
 
+def get_tutor_response(
+    agent: EnglishTutorAgent,
+    user_text: str,
+    stt_model_name: str,
+    *,
+    stream_response: bool,
+    tts_engine: TextToSpeechEngine | None,
+    stream_tts: bool,
+) -> tuple[str, TextToSpeechEngine | None]:
+    if not stream_response:
+        response = agent.reply(user_text, stt_model_name=stt_model_name)
+        print(f"\nTutor: {response}\n")
+        if tts_engine is not None and not speak_or_continue(tts_engine, response):
+            tts_engine = None
+        return response, tts_engine
+
+    chunks: list[str] = []
+    raw_chunk_iter = agent.reply_stream(user_text, stt_model_name=stt_model_name)
+
+    def printing_chunks():
+        for chunk in raw_chunk_iter:
+            chunks.append(chunk)
+            print(chunk, end="", flush=True)
+            yield chunk
+
+    print("\nTutor: ", end="", flush=True)
+    chunk_iter = printing_chunks()
+
+    if tts_engine is not None and stream_tts:
+        try:
+            for _output_path in tts_engine.speak_stream(chunk_iter):
+                pass
+        except TextToSpeechError as exc:
+            print(f"\nTTS unavailable: {exc}")
+            print("Continuing in text-only mode for this session.\n")
+            tts_engine = None
+            for _chunk in raw_chunk_iter:
+                chunks.append(_chunk)
+                print(_chunk, end="", flush=True)
+    else:
+        for _chunk in chunk_iter:
+            pass
+
+    print("\n")
+    response = "".join(chunks).strip()
+    if tts_engine is not None and not stream_tts and not speak_or_continue(tts_engine, response):
+        tts_engine = None
+    return response, tts_engine
+
+
 def print_session_header(
     *,
     input_mode: str,
@@ -141,6 +207,9 @@ def print_session_header(
     mode: TutorMode,
     tts_engine: TextToSpeechEngine | None,
     tts_name: str,
+    stream_response: bool,
+    stream_tts: bool,
+    record_mode: str | None = None,
     record_seconds: float | None = None,
 ) -> None:
     definition = get_mode_definition(mode)
@@ -149,6 +218,11 @@ def print_session_header(
     print(f"Tutor mode: {definition.label}")
     print(f"Focus: {definition.description}")
     print(f"TTS: {'off' if tts_engine is None else tts_name}")
+    print(f"LLM streaming: {'on' if stream_response else 'off'}")
+    if tts_engine is not None:
+        print(f"Streaming TTS: {'on' if stream_tts else 'off'}")
+    if record_mode is not None:
+        print(f"Recording mode: {record_mode}")
     if record_seconds is not None:
         print(f"Recording duration: {record_seconds:g} seconds")
 
@@ -196,6 +270,8 @@ def run_typed_loop(
     skip_model_check: bool,
     save_session: bool,
     disable_tts: bool,
+    stream_response: bool,
+    stream_tts: bool,
 ) -> int:
     agent, client = build_agent(config, mode)
     if not skip_model_check and not check_ollama_ready(client, config.ollama_model):
@@ -212,6 +288,8 @@ def run_typed_loop(
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,
+        stream_response=stream_response,
+        stream_tts=stream_tts,
     )
     print("Type /quit to exit, /help for commands.\n")
     tts_engine = play_starter_if_needed(agent, tts_engine)
@@ -230,14 +308,17 @@ def run_typed_loop(
                 continue
 
             try:
-                response = agent.reply(user_text)
+                _response, tts_engine = get_tutor_response(
+                    agent,
+                    user_text,
+                    "typed-input",
+                    stream_response=stream_response,
+                    tts_engine=tts_engine,
+                    stream_tts=stream_tts,
+                )
             except OllamaError as exc:
                 print(f"\nOllama error: {exc}\n")
                 continue
-
-            print(f"\nTutor: {response}\n")
-            if tts_engine is not None and not speak_or_continue(tts_engine, response):
-                tts_engine = None
     except KeyboardInterrupt:
         print("\nInterrupted.")
     except EOFError:
@@ -254,7 +335,10 @@ def run_voice_loop(
     skip_model_check: bool,
     save_session: bool,
     disable_tts: bool,
+    stream_response: bool,
+    stream_tts: bool,
     record_seconds: float | None = None,
+    record_mode: str | None = None,
 ) -> int:
     agent, client = build_agent(config, mode)
     if not skip_model_check and not check_ollama_ready(client, config.ollama_model):
@@ -267,6 +351,7 @@ def run_voice_loop(
     stt_engine = SpeechToTextEngine(config)
     tts_engine = build_tts_engine(config, disable_tts)
     duration = record_seconds or config.record_seconds
+    selected_record_mode = record_mode or config.record_mode
 
     print_session_header(
         input_mode="voice",
@@ -274,6 +359,9 @@ def run_voice_loop(
         mode=mode,
         tts_engine=tts_engine,
         tts_name=config.tts_engine,
+        stream_response=stream_response,
+        stream_tts=stream_tts,
+        record_mode=selected_record_mode,
         record_seconds=duration,
     )
     print("Press Enter to record, or type /quit to exit.\n")
@@ -292,15 +380,29 @@ def run_voice_loop(
                 continue
 
             try:
-                print(f"Recording for {duration:g} seconds...")
-                audio_path = recorder.record(duration)
+                if selected_record_mode == "vad":
+                    print(f"Recording with VAD for up to {duration:g} seconds...")
+                else:
+                    print(f"Recording for {duration:g} seconds...")
+
+                audio_path = recorder.record(duration, mode=selected_record_mode)
                 print(f"Saved audio: {audio_path}")
 
                 print("Transcribing...")
-                user_text = stt_engine.transcribe(audio_path)
+                transcription = stt_engine.transcribe_detailed(audio_path)
+                user_text = transcription.text
                 print(f"You said: {user_text}")
+                if transcription.pronunciation_feedback:
+                    print(transcription.pronunciation_feedback)
 
-                response = agent.reply(user_text, stt_model_name=stt_engine.backend_name)
+                _response, tts_engine = get_tutor_response(
+                    agent,
+                    user_text,
+                    stt_engine.backend_name,
+                    stream_response=stream_response,
+                    tts_engine=tts_engine,
+                    stream_tts=stream_tts,
+                )
             except AudioRecordingError as exc:
                 print(f"\nAudio recording error: {exc}")
                 print("Try `python -m app.main --input typed` while you fix microphone setup.\n")
@@ -312,10 +414,6 @@ def run_voice_loop(
             except OllamaError as exc:
                 print(f"\nOllama error: {exc}\n")
                 continue
-
-            print(f"\nTutor: {response}\n")
-            if tts_engine is not None and not speak_or_continue(tts_engine, response):
-                tts_engine = None
     except KeyboardInterrupt:
         print("\nInterrupted.")
     except EOFError:
@@ -335,6 +433,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     mode = choose_mode(args.mode)
+    stream_response = config.llm_stream and not args.no_stream
+    stream_tts = config.stream_tts and not args.no_stream_tts
+
     if args.input == "typed":
         return run_typed_loop(
             config=config,
@@ -342,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
             skip_model_check=args.skip_model_check,
             save_session=not args.no_save,
             disable_tts=args.no_tts,
+            stream_response=stream_response,
+            stream_tts=stream_tts,
         )
 
     return run_voice_loop(
@@ -350,7 +453,10 @@ def main(argv: list[str] | None = None) -> int:
         skip_model_check=args.skip_model_check,
         save_session=not args.no_save,
         disable_tts=args.no_tts,
+        stream_response=stream_response,
+        stream_tts=stream_tts,
         record_seconds=args.record_seconds,
+        record_mode=args.record_mode,
     )
 
 

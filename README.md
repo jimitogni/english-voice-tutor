@@ -16,11 +16,11 @@ Microphone
 
 The current version records from your microphone, transcribes the WAV file with
 `faster-whisper`, sends the text to a local Ollama model, prints the tutor's
-response, and can speak the answer with Piper TTS.
+response, streams text/audio when enabled, and can speak the answer with Piper TTS.
 
 ## Current Phase
 
-Implemented through Phase 5:
+Implemented through Phase 6:
 
 - Project structure
 - Environment-based configuration
@@ -36,6 +36,12 @@ Implemented through Phase 5:
 - Timestamped WAV outputs in `data/audio_outputs/`
 - Audio playback through `aplay`, `paplay`, `pw-play`, `ffplay`, or `sounddevice`
 - Tutor modes for free conversation, interview practice, and vocabulary practice
+- Energy-based voice activity detection
+- Ollama streaming responses
+- Sentence-by-sentence Piper TTS
+- Lightweight pronunciation feedback
+- Streamlit web UI
+- Docker Compose web stack
 - Optional JSON conversation saving
 - Ollama check script
 - Typed full-loop test script
@@ -136,7 +142,7 @@ python scripts/check_ollama.py
 
 This verifies that Ollama is reachable at `OLLAMA_BASE_URL`, lists available local models, and tells you if the configured model is missing.
 
-## Run Phase 3 Voice Mode
+## Run The Terminal App
 
 ```bash
 python -m app.main
@@ -148,11 +154,25 @@ transcribes it, sends the transcription to Ollama, prints the tutor response,
 generates speech with Piper, and plays the WAV file.
 
 By default, the app asks you to choose a tutor mode at startup.
+Ollama streaming and sentence-by-sentence Piper playback are enabled by default.
 
 You can override the recording duration:
 
 ```bash
 python -m app.main --record-seconds 5
+```
+
+Use voice activity detection so recording stops after silence:
+
+```bash
+python -m app.main --record-mode vad --record-seconds 12
+```
+
+Disable streaming for one run:
+
+```bash
+python -m app.main --no-stream
+python -m app.main --no-stream-tts
 ```
 
 Keep the typed fallback for debugging:
@@ -215,9 +235,18 @@ STT_MODEL_SIZE=base
 STT_LANGUAGE=en
 STT_DEVICE=cpu
 STT_COMPUTE_TYPE=int8
+PRONUNCIATION_FEEDBACK=true
 RECORD_SECONDS=8
+RECORD_MODE=fixed
 SAMPLE_RATE=16000
+VAD_ENERGY_THRESHOLD=0.02
+VAD_SILENCE_SECONDS=1.0
+VAD_MIN_SPEECH_SECONDS=0.4
+VAD_MAX_SECONDS=12
+VAD_CHUNK_MS=30
+LLM_STREAM=true
 TTS_ENGINE=piper
+STREAM_TTS=true
 PIPER_EXECUTABLE=piper
 PIPER_MODEL_PATH=./models/piper/en_US-lessac-medium.onnx
 PIPER_CONFIG_PATH=./models/piper/en_US-lessac-medium.onnx.json
@@ -286,6 +315,62 @@ python -m app.main --mode vocabulary
 ```
 
 All modes answer in English unless you explicitly ask for Portuguese.
+
+## Voice Activity Detection
+
+The app supports two recording modes:
+
+```env
+RECORD_MODE=fixed
+RECORD_MODE=vad
+```
+
+`fixed` records for `RECORD_SECONDS`. `vad` uses a simple local energy
+threshold and stops after sustained silence. Tune these values if recording cuts
+off too early or waits too long:
+
+```env
+VAD_ENERGY_THRESHOLD=0.02
+VAD_SILENCE_SECONDS=1.0
+VAD_MIN_SPEECH_SECONDS=0.4
+VAD_MAX_SECONDS=12
+VAD_CHUNK_MS=30
+```
+
+## Streaming
+
+Ollama streaming is enabled by default:
+
+```env
+LLM_STREAM=true
+```
+
+In terminal mode, streamed chunks are printed as they arrive. Piper can also
+synthesize sentence chunks as they appear:
+
+```env
+STREAM_TTS=true
+```
+
+Use these flags to compare behavior:
+
+```bash
+python -m app.main --no-stream
+python -m app.main --no-stream-tts
+```
+
+## Pronunciation Feedback
+
+After STT, the app shows a lightweight pronunciation/audio note based on
+Whisper segment confidence and silence probability. This is not phoneme-level
+scoring yet, but it gives quick feedback when the transcription looked uncertain
+or noisy.
+
+Disable it with:
+
+```env
+PRONUNCIATION_FEEDBACK=false
+```
 
 ## Piper Text-To-Speech
 
@@ -376,6 +461,63 @@ with:
 STT_DEVICE=cuda
 STT_COMPUTE_TYPE=float16
 ```
+
+## Streamlit Web UI
+
+The project includes a small Streamlit interface for local browser-based
+practice:
+
+```bash
+streamlit run ui/streamlit_app.py
+```
+
+Open the URL Streamlit prints, usually:
+
+```text
+http://localhost:8501
+```
+
+The UI supports:
+
+- tutor mode selection
+- typed chat
+- streaming Ollama responses
+- optional audio-file upload for STT
+- browser playback of generated Piper WAV files
+
+Browser microphone capture is not implemented yet. For live microphone practice,
+use the terminal app.
+
+## Docker Compose
+
+The repository includes a Dockerfile and `docker-compose.yml` for a local web
+stack with Ollama and the Streamlit UI:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+Pull the model inside the Ollama container:
+
+```bash
+docker compose exec ollama ollama pull llama3.2:3b
+```
+
+Persistent paths:
+
+- Ollama models live in the named Docker volume `ollama`
+- app audio/conversation data is mounted from `./data`
+- Piper voice models are mounted from `./models`
+
+Containerized live microphone access is Linux-specific and needs extra device
+mapping, so Docker Compose is aimed at the Streamlit typed/audio-upload workflow
+first.
 
 ## Troubleshooting
 
@@ -536,6 +678,8 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
   try again.
 - If TTS fails, the app disables speech output for that run and continues in
   text-only mode.
+- Streaming, VAD, pronunciation notes, Docker Compose, and Streamlit are local
+  features; they do not introduce paid API usage.
 
 ## Roadmap
 
@@ -544,23 +688,29 @@ The app tries `aplay`, `paplay`, `pw-play`, `ffplay`, and finally Python
 3. Phase 3: Piper TTS and audio playback
 4. Phase 4: richer JSON session saving and progress metadata
 5. Phase 5: tutor modes for free conversation, interview practice, and vocabulary
-6. Phase 6: latency improvements, streaming responses, voice activity detection, and optional Streamlit/FastAPI UI
+6. Phase 6: latency improvements, streaming responses, voice activity detection, pronunciation notes, Docker Compose, and Streamlit UI
+
+## Implemented Advanced Features
+
+- Voice activity detection: energy-based silence detection with configurable
+  thresholds.
+- Streaming LLM responses: Ollama streaming chunks in terminal and Streamlit.
+- Streaming TTS: sentence-by-sentence Piper synthesis in the terminal.
+- Pronunciation feedback: lightweight notes from Whisper segment confidence and
+  silence probability.
+- Docker Compose: Ollama plus Streamlit UI with mounted model/data folders.
+- Web interface: Streamlit UI for typed chat, audio upload, mode selection, and
+  generated audio playback.
 
 ## Future Version Ideas
 
-- Voice activity detection: replace fixed-duration recording with silence-based
-  stop detection using `webrtcvad`, `silero-vad`, or an energy threshold.
-- Streaming LLM responses: use Ollama streaming responses so text starts
-  appearing before the full answer is complete.
-- Streaming TTS: split assistant responses into sentences and synthesize/play
-  chunks as they arrive.
-- Pronunciation feedback: compare STT output with expected phrases, use Whisper
-  timestamps/confidence signals, or add a phoneme-level scoring backend later.
-- Docker Compose: package Ollama, app dependencies, mounted model folders, and
-  persistent data volumes. Audio device access will need explicit Linux device
-  mapping.
-- Web interface: add Streamlit for a quick local practice UI, or FastAPI plus a
-  small frontend for cleaner audio upload, mode selection, and session history.
+- Replace energy VAD with `webrtcvad` or `silero-vad` for stronger speech
+  detection in noisy rooms.
+- Make TTS playback concurrent so sentence synthesis does not pause LLM stream
+  consumption.
+- Add phoneme-level pronunciation scoring and target phrase comparison.
+- Add FastAPI endpoints for a cleaner frontend or mobile client.
+- Add persistent learner profiles, vocabulary review, and progress charts.
 
 ## Development Notes
 
