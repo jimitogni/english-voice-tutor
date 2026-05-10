@@ -3,8 +3,6 @@ services:
     image: ollama/ollama:latest
     container_name: english-voice-tutor-ollama
     restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama:/root/.ollama
     healthcheck:
@@ -26,8 +24,6 @@ services:
       PIPER_EXECUTABLE: piper
       PIPER_MODEL_PATH: /app/models/piper/en_US-lessac-medium.onnx
       PIPER_CONFIG_PATH: /app/models/piper/en_US-lessac-medium.onnx.json
-    ports:
-      - "${API_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
       - ./models:/app/models
@@ -45,14 +41,35 @@ services:
       context: .
       dockerfile: web/Dockerfile
       args:
+        VITE_BASE_PATH: ${WEB_BASE_PATH:-/}
         VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-}
     container_name: english-voice-tutor-web
     restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-8080}:80"
+    networks:
+      - default
+      - proxy
     depends_on:
       api:
         condition: service_started
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "${TRAEFIK_NETWORK:-traefik_proxy}"
+      traefik.http.routers.english-voice-tutor.rule: "(Host(`${PUBLIC_APPS_HOST:-jimitogni.duckdns.org}`) || Host(`localhost`) || Host(`127.0.0.1`)) && PathPrefix(`${WEB_BASE_PATH:-/english}`)"
+      traefik.http.routers.english-voice-tutor.entrypoints: "${TRAEFIK_HTTP_ENTRYPOINT:-web}"
+      traefik.http.routers.english-voice-tutor.priority: "130"
+      traefik.http.routers.english-voice-tutor.service: "english-voice-tutor"
+      traefik.http.routers.english-voice-tutor-secure.rule: "Host(`${PUBLIC_APPS_HOST:-jimitogni.duckdns.org}`) && PathPrefix(`${WEB_BASE_PATH:-/english}`)"
+      traefik.http.routers.english-voice-tutor-secure.entrypoints: "${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}"
+      traefik.http.routers.english-voice-tutor-secure.priority: "130"
+      traefik.http.routers.english-voice-tutor-secure.tls: "true"
+      traefik.http.routers.english-voice-tutor-secure.tls.certresolver: "${TRAEFIK_CERT_RESOLVER:-duckdns}"
+      traefik.http.routers.english-voice-tutor-secure.service: "english-voice-tutor"
+      traefik.http.services.english-voice-tutor.loadbalancer.server.port: "80"
 
 volumes:
   ollama:
+
+networks:
+  proxy:
+    external: true
+    name: "${TRAEFIK_NETWORK:-traefik_proxy}"

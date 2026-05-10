@@ -14,6 +14,14 @@ function preferredMimeType(): string {
   return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
 }
 
+function microphoneUnavailableMessage(): string {
+  if (!window.isSecureContext) {
+    return "Microphone recording requires HTTPS or a localhost URL. Use HTTPS, or open the app through a localhost SSH tunnel.";
+  }
+
+  return "This browser does not expose microphone recording. Check browser support and microphone permissions.";
+}
+
 export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps) {
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
@@ -136,7 +144,7 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      setRecordingError("This browser does not expose microphone recording for localhost.");
+      setRecordingError(microphoneUnavailableMessage());
       return;
     }
     if (!window.MediaRecorder) {

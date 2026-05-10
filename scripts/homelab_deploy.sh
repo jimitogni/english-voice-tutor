@@ -21,8 +21,14 @@ if [[ "${SKIP_PIPER_DOWNLOAD:-0}" != "1" ]]; then
   bash scripts/homelab_download_piper_voices.sh
 fi
 
+compose_args=(--env-file .env.homelab -f docker-compose.yml)
+if [[ "${ENABLE_OLLAMA_GPU:-0}" == "1" ]]; then
+  compose_args+=(-f docker-compose.gpu.yml)
+  echo "Ollama GPU override enabled."
+fi
+
 echo "Building and starting the homelab stack..."
-docker compose --env-file .env.homelab up -d --build
+docker compose "${compose_args[@]}" up -d --build
 
 set -a
 # shellcheck source=/dev/null
@@ -40,7 +46,7 @@ if [[ "${SKIP_OLLAMA_PULL:-0}" != "1" ]]; then
 
   for model in "${models_to_pull[@]}"; do
     echo "Pulling Ollama model: $model"
-    docker compose --env-file .env.homelab exec -T ollama ollama pull "$model"
+    docker compose "${compose_args[@]}" exec -T ollama ollama pull "$model"
   done
 fi
 

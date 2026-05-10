@@ -737,6 +737,22 @@ docker compose --env-file .env.homelab ps
 docker compose --env-file .env.homelab down
 ```
 
+Optional Ollama GPU acceleration:
+
+```bash
+ENABLE_OLLAMA_GPU=1 scripts/homelab_deploy.sh
+```
+
+This uses `docker-compose.gpu.yml` to start the Ollama container with
+`gpus: all`. The host still needs a working NVIDIA driver and NVIDIA Container
+Toolkit for Docker. Verify the result with:
+
+```bash
+docker compose --env-file .env.homelab exec -T ollama ollama ps
+```
+
+The `PROCESSOR` column should show GPU use instead of `100% CPU`.
+
 Edit `.env.homelab` to change ports, models, VAD settings, identity, or STT/TTS
 settings:
 
