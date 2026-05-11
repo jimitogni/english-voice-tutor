@@ -22,11 +22,19 @@ function microphoneUnavailableMessage(): string {
   return "This browser does not expose microphone recording. Check browser support and microphone permissions.";
 }
 
+function formatDuration(totalSeconds: number): string {
+  const boundedSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(boundedSeconds / 60);
+  const seconds = boundedSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps) {
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -36,6 +44,8 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
   const startedAtRef = useRef<number>(0);
   const speechStartedAtRef = useRef<number | null>(null);
   const silenceStartedAtRef = useRef<number | null>(null);
+  const elapsedSecondRef = useRef(-1);
+  const lastVadCheckAtRef = useRef(0);
   const stoppingRef = useRef(false);
   const onSendAudioRef = useRef(onSendAudio);
   const vadRef = useRef(vad);
@@ -81,6 +91,7 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
     }
     stopTracks();
     setRecording(false);
+    setElapsedSeconds(0);
   }
 
   function readLevel(samples: Float32Array): number {
@@ -93,19 +104,40 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
 
   function monitorSilence() {
     const analyser = analyserRef.current;
-    const settings = vadRef.current;
-    if (!analyser || !settings) {
+    if (!analyser) {
       return;
     }
 
     const samples = new Float32Array(analyser.fftSize);
     const tick = () => {
+      const settings = vadRef.current;
+      if (!settings) {
+        return;
+      }
+      const now = performance.now();
+      const checkIntervalMs = Math.max(10, Math.round(settings.chunk_ms));
+      if (
+        lastVadCheckAtRef.current > 0 &&
+        now - lastVadCheckAtRef.current < checkIntervalMs
+      ) {
+        animationRef.current = window.requestAnimationFrame(tick);
+        return;
+      }
+      lastVadCheckAtRef.current = now;
+
       analyser.getFloatTimeDomainData(samples);
       const rms = readLevel(samples);
       setLevel(Math.min(1, rms / Math.max(settings.energy_threshold * 3, 0.001)));
 
-      const now = performance.now();
-      const elapsedSeconds = (now - startedAtRef.current) / 1000;
+      const elapsed = (now - startedAtRef.current) / 1000;
+      const wholeElapsedSeconds = Math.min(
+        Math.floor(elapsed),
+        Math.max(0, Math.ceil(settings.max_seconds)),
+      );
+      if (wholeElapsedSeconds !== elapsedSecondRef.current) {
+        elapsedSecondRef.current = wholeElapsedSeconds;
+        setElapsedSeconds(wholeElapsedSeconds);
+      }
       const speechStartedAt = speechStartedAtRef.current;
       const hasVoice = rms >= settings.energy_threshold;
 
@@ -127,7 +159,7 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
         }
       }
 
-      if (elapsedSeconds >= settings.max_seconds) {
+      if (elapsed >= settings.max_seconds) {
         stopRecording();
         return;
       }
@@ -156,6 +188,9 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
     stoppingRef.current = false;
     speechStartedAtRef.current = null;
     silenceStartedAtRef.current = null;
+    elapsedSecondRef.current = -1;
+    lastVadCheckAtRef.current = 0;
+    setElapsedSeconds(0);
     chunksRef.current = [];
 
     try {
@@ -185,6 +220,7 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
         analyserRef.current = null;
         setRecording(false);
         setLevel(0);
+        setElapsedSeconds(0);
         if (blob.size > 0) {
           void onSendAudioRef.current(blob);
         }
@@ -215,6 +251,7 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
     } catch (error) {
       stopTracks();
       setRecording(false);
+      setElapsedSeconds(0);
       setRecordingError(
         error instanceof Error
           ? error.message
@@ -236,15 +273,20 @@ export function VoiceDock({ busy, vad, onSendText, onSendAudio }: VoiceDockProps
   return (
     <footer className="voice-dock">
       <div className="recording-controls">
-        <button
-          className={recording ? "record-button recording" : "record-button"}
-          disabled={busy}
-          onClick={recording ? stopRecording : startRecording}
-          title={recording ? "Stop recording" : "Start recording"}
-          type="button"
-        >
-          {recording ? <Square size={22} aria-hidden="true" /> : <Mic size={22} aria-hidden="true" />}
-        </button>
+        <div className="record-button-stack">
+          <button
+            className={recording ? "record-button recording" : "record-button"}
+            disabled={busy}
+            onClick={recording ? stopRecording : startRecording}
+            title={recording ? "Stop recording" : "Start recording"}
+            type="button"
+          >
+            {recording ? <Square size={22} aria-hidden="true" /> : <Mic size={22} aria-hidden="true" />}
+          </button>
+          <span className="recording-timer" aria-live="polite">
+            {formatDuration(elapsedSeconds)} / {formatDuration(vad?.max_seconds ?? 0)}
+          </span>
+        </div>
         <div className="level-meter" aria-hidden="true">
           <span style={{ transform: `scaleX(${level})` }} />
         </div>

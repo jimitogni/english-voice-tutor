@@ -37,6 +37,9 @@ export interface StatusResponse {
   focus_words_limit: number;
   tts_enabled: boolean;
   llm_stream_enabled: boolean;
+  stt_device: string;
+  stt_compute_type: string;
+  piper_cuda: boolean;
   vad: VadSettings;
 }
 

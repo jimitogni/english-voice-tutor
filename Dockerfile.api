@@ -2,7 +2,10 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    NVIDIA_PYTHON_LIBS=/usr/local/lib/python3.11/site-packages/nvidia
+
+ENV LD_LIBRARY_PATH=${NVIDIA_PYTHON_LIBS}/cuda_runtime/lib:${NVIDIA_PYTHON_LIBS}/cublas/lib:${NVIDIA_PYTHON_LIBS}/cudnn/lib:${NVIDIA_PYTHON_LIBS}/cufft/lib:${NVIDIA_PYTHON_LIBS}/curand/lib
 
 WORKDIR /app
 
@@ -16,8 +19,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+ARG INSTALL_GPU_DEPS=0
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
+RUN if [ "$INSTALL_GPU_DEPS" = "1" ]; then \
+      python -m pip uninstall -y onnxruntime \
+      && python -m pip install "onnxruntime-gpu[cuda,cudnn]>=1.22.0" nvidia-cublas-cu12; \
+    fi
 
 COPY app ./app
 COPY scripts ./scripts

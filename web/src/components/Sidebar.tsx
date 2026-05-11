@@ -1,6 +1,75 @@
-import { BookOpen, Brain, BriefcaseBusiness, Plus, RotateCcw, Trash2, Volume2 } from "lucide-react";
+import {
+  BookOpen,
+  Brain,
+  BriefcaseBusiness,
+  ChevronDown,
+  Plus,
+  RotateCcw,
+  SlidersHorizontal,
+  Trash2,
+  Volume2,
+} from "lucide-react";
 import { FormEvent, useState } from "react";
-import type { ModeInfo, VoiceInfo } from "../types";
+import type { ModeInfo, VadSettings, VoiceInfo } from "../types";
+
+type VadSettingKey = "max_seconds" | "silence_seconds" | "energy_threshold" | "chunk_ms" | "min_speech_seconds";
+
+interface VadControl {
+  key: VadSettingKey;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  decimals: number;
+}
+
+const vadControls: VadControl[] = [
+  {
+    key: "max_seconds",
+    label: "Max recording",
+    min: 5,
+    max: 300,
+    step: 1,
+    unit: "s",
+    decimals: 0,
+  },
+  {
+    key: "silence_seconds",
+    label: "Silence stop",
+    min: 0.3,
+    max: 8,
+    step: 0.1,
+    unit: "s",
+    decimals: 1,
+  },
+  {
+    key: "energy_threshold",
+    label: "Energy threshold",
+    min: 0.001,
+    max: 0.12,
+    step: 0.001,
+    decimals: 3,
+  },
+  {
+    key: "chunk_ms",
+    label: "VAD chunk",
+    min: 10,
+    max: 250,
+    step: 10,
+    unit: "ms",
+    decimals: 0,
+  },
+  {
+    key: "min_speech_seconds",
+    label: "Min speech",
+    min: 0.1,
+    max: 3,
+    step: 0.1,
+    unit: "s",
+    decimals: 1,
+  },
+];
 
 interface SidebarProps {
   assistantName: string;
@@ -21,6 +90,8 @@ interface SidebarProps {
   onAddFocusWord: (word: string) => Promise<void>;
   onRemoveFocusWord: (word: string) => Promise<void>;
   onReset: () => Promise<void>;
+  vad: VadSettings;
+  onVadChange: (settings: VadSettings) => void;
   busy: boolean;
 }
 
@@ -32,6 +103,26 @@ function modeIcon(modeKey: string) {
     return <BookOpen size={17} aria-hidden="true" />;
   }
   return <Brain size={17} aria-hidden="true" />;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formattedVadValue(settings: VadSettings, control: VadControl): string {
+  const value = settings[control.key];
+  const formatted = value.toFixed(control.decimals);
+  return control.unit ? `${formatted} ${control.unit}` : formatted;
+}
+
+function formattedDurationSummary(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes} min`;
+  }
+  return `${seconds}s`;
 }
 
 export function Sidebar({
@@ -53,10 +144,13 @@ export function Sidebar({
   onAddFocusWord,
   onRemoveFocusWord,
   onReset,
+  vad,
+  onVadChange,
   busy,
 }: SidebarProps) {
   const [newFocusWord, setNewFocusWord] = useState("");
   const [focusBusy, setFocusBusy] = useState(false);
+  const [vadOpen, setVadOpen] = useState(false);
 
   async function submitFocusWord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,6 +168,17 @@ export function Sidebar({
   }
 
   const modelInstalled = installedModels.includes(selectedModel);
+
+  function updateVad(control: VadControl, value: number) {
+    if (!Number.isFinite(value)) {
+      return;
+    }
+    const nextValue = clamp(value, control.min, control.max);
+    onVadChange({
+      ...vad,
+      [control.key]: control.decimals === 0 ? Math.round(nextValue) : nextValue,
+    });
+  }
 
   return (
     <aside className="sidebar">
@@ -137,6 +242,62 @@ export function Sidebar({
           />
           <span>Autoplay speech</span>
         </label>
+      </section>
+
+      <section className="panel-section vad-section">
+        <button
+          aria-controls="voice-detection-settings"
+          aria-expanded={vadOpen}
+          className={vadOpen ? "section-heading vad-toggle open" : "section-heading vad-toggle"}
+          onClick={() => setVadOpen((open) => !open)}
+          type="button"
+        >
+          <span className="vad-toggle-title">
+            <span className="status-light" aria-hidden="true" />
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            <span>Voice Detection</span>
+          </span>
+          <span className="vad-toggle-summary">
+            {formattedDurationSummary(vad.max_seconds)} max
+            <ChevronDown size={15} aria-hidden="true" />
+          </span>
+        </button>
+        {vadOpen && (
+          <div className="vad-settings" id="voice-detection-settings">
+            {vadControls.map((control) => {
+              const value = Number(vad[control.key].toFixed(control.decimals));
+              return (
+                <label className="range-field" key={control.key}>
+                  <span className="range-field-header">
+                    <span>{control.label}</span>
+                    <output>{formattedVadValue(vad, control)}</output>
+                  </span>
+                  <span className="range-inputs">
+                    <input
+                      aria-label={control.label}
+                      max={control.max}
+                      min={control.min}
+                      onChange={(event) => updateVad(control, event.target.valueAsNumber)}
+                      step={control.step}
+                      type="range"
+                      value={value}
+                    />
+                    <input
+                      aria-label={`${control.label} value`}
+                      className="number-input"
+                      max={control.max}
+                      min={control.min}
+                      onChange={(event) => updateVad(control, event.target.valueAsNumber)}
+                      step={control.step}
+                      type="number"
+                      value={value}
+                    />
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="panel-section focus-section">

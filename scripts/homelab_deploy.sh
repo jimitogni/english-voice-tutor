@@ -22,9 +22,9 @@ if [[ "${SKIP_PIPER_DOWNLOAD:-0}" != "1" ]]; then
 fi
 
 compose_args=(--env-file .env.homelab -f docker-compose.yml)
-if [[ "${ENABLE_OLLAMA_GPU:-0}" == "1" ]]; then
+if [[ "${ENABLE_GPU:-0}" == "1" || "${ENABLE_OLLAMA_GPU:-0}" == "1" ]]; then
   compose_args+=(-f docker-compose.gpu.yml)
-  echo "Ollama GPU override enabled."
+  echo "GPU override enabled for Ollama and API services."
 fi
 
 echo "Building and starting the homelab stack..."

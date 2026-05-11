@@ -145,7 +145,7 @@
         energyThreshold: 0.02,
         silenceSeconds: 1.0,
         minSpeechSeconds: 0.4,
-        maxSeconds: 12.0,
+        maxSeconds: 300.0,
       };
 
       let mediaStream = null;
@@ -457,7 +457,7 @@
           energyThreshold: Number(args.energy_threshold || 0.02),
           silenceSeconds: Number(args.silence_seconds || 1.0),
           minSpeechSeconds: Number(args.min_speech_seconds || 0.4),
-          maxSeconds: Number(args.max_seconds || 12.0),
+          maxSeconds: Number(args.max_seconds || 300.0),
         };
         updateSettingsText();
         setFrameHeight(156);

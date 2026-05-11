@@ -132,6 +132,7 @@ input:disabled {
 
 select,
 .focus-form input,
+.number-input,
 .text-composer input {
   width: 100%;
   border: 1px solid #d7dee4;
@@ -148,6 +149,7 @@ select {
 
 select:focus,
 .focus-form input:focus,
+.number-input:focus,
 .text-composer input:focus {
   border-color: #187974;
   box-shadow: 0 0 0 3px rgba(24, 121, 116, 0.14);
@@ -195,6 +197,113 @@ select:focus,
 .toggle-row input {
   width: 17px;
   height: 17px;
+}
+
+.vad-section {
+  gap: 8px;
+}
+
+.vad-toggle {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #dfe5ea;
+  border-radius: 8px;
+  background: #f7f9fb;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.vad-toggle:hover,
+.vad-toggle.open {
+  border-color: #c9d9d7;
+  background: #eef7f5;
+}
+
+.vad-toggle-title,
+.vad-toggle-summary {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.vad-toggle-title {
+  overflow: hidden;
+}
+
+.vad-toggle-title span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vad-toggle-summary {
+  flex-shrink: 0;
+  color: #68737d;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.vad-toggle-summary svg {
+  transition: transform 140ms ease;
+}
+
+.vad-toggle.open .vad-toggle-summary svg {
+  transform: rotate(180deg);
+}
+
+.status-light {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: #187974;
+  box-shadow: 0 0 0 3px rgba(24, 121, 116, 0.14);
+}
+
+.vad-settings {
+  display: grid;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.range-field {
+  display: grid;
+  gap: 7px;
+}
+
+.range-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #48515a;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.range-field-header output {
+  color: #68737d;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.range-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px;
+  gap: 8px;
+  align-items: center;
+}
+
+.range-inputs input[type="range"] {
+  width: 100%;
+  accent-color: #187974;
+}
+
+.number-input {
+  min-height: 36px;
+  padding: 0 8px;
 }
 
 .focus-form {
@@ -361,9 +470,34 @@ select:focus,
   text-transform: uppercase;
 }
 
-.message-bubble p {
+.message-content {
+  margin-top: 8px;
+}
+
+.message-content p {
   margin: 8px 0 0;
   white-space: pre-wrap;
+}
+
+.message-content p:first-child {
+  margin-top: 0;
+}
+
+.message-content ul {
+  margin: 8px 0 0;
+  padding-left: 1.25rem;
+}
+
+.message-content li {
+  margin: 5px 0;
+}
+
+.message-content strong {
+  font-weight: 800;
+}
+
+.message-content em {
+  font-style: italic;
 }
 
 .feedback-note {
@@ -424,7 +558,7 @@ select:focus,
 
 .voice-dock {
   display: grid;
-  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-columns: 214px minmax(0, 1fr);
   gap: 14px;
   align-items: center;
   border-top: 1px solid #dfe5ea;
@@ -434,9 +568,15 @@ select:focus,
 
 .recording-controls {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 84px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
+}
+
+.record-button-stack {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
 }
 
 .record-button {
@@ -451,6 +591,16 @@ select:focus,
 
 .record-button.recording {
   background: #c95031;
+}
+
+.recording-timer {
+  min-width: 78px;
+  color: #68737d;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .level-meter {
@@ -542,7 +692,7 @@ select:focus,
   }
 
   .recording-controls {
-    grid-template-columns: 54px minmax(0, 1fr);
+    grid-template-columns: 82px minmax(0, 1fr);
   }
 
   .record-button {

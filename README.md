@@ -261,11 +261,12 @@ SAMPLE_RATE=16000
 VAD_ENERGY_THRESHOLD=0.015
 VAD_SILENCE_SECONDS=2.2
 VAD_MIN_SPEECH_SECONDS=0.4
-VAD_MAX_SECONDS=30
+VAD_MAX_SECONDS=300
 VAD_CHUNK_MS=30
 LLM_STREAM=true
 TTS_ENGINE=piper
 STREAM_TTS=true
+PIPER_CUDA=false
 PIPER_EXECUTABLE=piper
 PIPER_MODEL_PATH=./models/piper/en_US-lessac-medium.onnx
 PIPER_CONFIG_PATH=./models/piper/en_US-lessac-medium.onnx.json
@@ -376,13 +377,12 @@ long:
 VAD_ENERGY_THRESHOLD=0.015
 VAD_SILENCE_SECONDS=2.2
 VAD_MIN_SPEECH_SECONDS=0.4
-VAD_MAX_SECONDS=30
+VAD_MAX_SECONDS=300
 VAD_CHUNK_MS=30
 ```
 
-In Streamlit, open the sidebar's "Voice detection" panel to tune these values
-without editing `.env`. If Jarvis cuts you off, increase "Pause before
-auto-send". If quiet words are missed, lower "Voice threshold".
+In React, click the sidebar's Voice Detection row to show or hide these values.
+In Streamlit, open the sidebar's Voice detection panel to tune them.
 
 ## Streaming
 
@@ -737,21 +737,71 @@ docker compose --env-file .env.homelab ps
 docker compose --env-file .env.homelab down
 ```
 
-Optional Ollama GPU acceleration:
+Optional GPU acceleration for Ollama, faster-whisper, and Piper:
 
 ```bash
-ENABLE_OLLAMA_GPU=1 scripts/homelab_deploy.sh
+ENABLE_GPU=1 scripts/homelab_deploy.sh
 ```
 
-This uses `docker-compose.gpu.yml` to start the Ollama container with
+This uses `docker-compose.gpu.yml` to start the Ollama and API containers with
 `gpus: all`. The host still needs a working NVIDIA driver and NVIDIA Container
-Toolkit for Docker. Verify the result with:
+Toolkit for Docker. For GPU STT/TTS, set these in `.env.homelab`:
+
+```env
+STT_DEVICE=cuda
+STT_COMPUTE_TYPE=float16
+PIPER_CUDA=true
+```
+
+Verify Ollama GPU use with:
 
 ```bash
-docker compose --env-file .env.homelab exec -T ollama ollama ps
+docker compose --env-file .env.homelab -f docker-compose.yml -f docker-compose.gpu.yml exec -T ollama ollama ps
 ```
 
 The `PROCESSOR` column should show GPU use instead of `100% CPU`.
+
+## LLMOps Observability
+
+English Voice Tutor includes optional observability for the homelab deployment:
+
+- Langfuse tracing for chat requests, prompt construction, Ollama generations, TTS spans, model names, session IDs, request IDs, latency, and token counts when Ollama returns them.
+- Prometheus metrics at `/english/api/metrics`.
+- Grafana dashboard JSON at `docs/observability/grafana_llm_dashboard.json`.
+- Evidently-compatible evaluation reports under `data/reports/evidently`.
+- Structured JSON logs when `LOG_JSON=true`.
+
+Langfuse was not installed on the server when this was added, so `LANGFUSE_ENABLED=false`
+is the safe default. After deploying a private Langfuse instance, set real keys only in
+`.env.homelab`:
+
+```env
+LANGFUSE_ENABLED=true
+LANGFUSE_HOST=http://<private-langfuse-host>:3000
+LANGFUSE_PUBLIC_KEY=<project-public-key>
+LANGFUSE_SECRET_KEY=<project-secret-key>
+```
+
+The existing homelab Prometheus can scrape the app through the web container:
+
+```yaml
+- job_name: english-voice-tutor
+  metrics_path: /english/api/metrics
+  static_configs:
+    - targets:
+        - english-voice-tutor-web:80
+```
+
+Run the local checks:
+
+```bash
+scripts/observability/check_observability_stack.sh
+scripts/observability/send_test_chat_request.sh
+scripts/observability/test_metrics_endpoint.sh
+python scripts/observability/run_evidently_eval.py
+```
+
+More details are in `docs/observability/`.
 
 Edit `.env.homelab` to change ports, models, VAD settings, identity, or STT/TTS
 settings:

@@ -1,0 +1,5 @@
+  - job_name: english-voice-tutor
+    metrics_path: /english/api/metrics
+    static_configs:
+      - targets:
+          - english-voice-tutor-web:80

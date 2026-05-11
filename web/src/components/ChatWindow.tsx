@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { absoluteAudioUrl } from "../api";
 import type { ChatMessage, ModeInfo } from "../types";
+import { FormattedMessage } from "./FormattedMessage";
 
 interface ChatWindowProps {
   messages: ChatMessage[];
@@ -50,7 +51,7 @@ export function ChatWindow({
                 {message.modelName && <span>{message.modelName}</span>}
                 {message.voiceLabel && <span>{message.voiceLabel}</span>}
               </div>
-              <p>{message.content}</p>
+              <FormattedMessage content={message.content} />
               {message.pronunciationFeedback && (
                 <div className="feedback-note">{message.pronunciationFeedback}</div>
               )}

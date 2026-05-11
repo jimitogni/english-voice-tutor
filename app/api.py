@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
+from time import perf_counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Lock
 from typing import cast
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +20,17 @@ from app.config import AppConfig, ConfigError, load_config
 from app.focus_words import FocusWordsError, FocusWordsStore
 from app.llm_client import OllamaClient, OllamaError
 from app.memory import ConversationMemory, ConversationMemoryError
+from app.observability import ObservabilityContext, current_endpoint, current_request_id, current_trace
+from app.observability.context import use_observability_context
+from app.observability.langfuse_client import get_langfuse_tracer, langfuse_credentials_configured
+from app.observability.logging import configure_logging, log_event
+from app.observability.metrics import (
+    metrics_response,
+    observe_fastapi_request,
+    observe_stt_call,
+    observe_tts_call,
+)
+from app.observability.privacy import hash_identifier, maybe_response
 from app.prompts import TutorMode, available_modes, get_mode_definition
 from app.stt import SpeechToTextEngine, SpeechToTextError, TranscriptionResult
 from app.tts import TextToSpeechEngine, TextToSpeechError
@@ -30,6 +43,8 @@ from app.voice_profiles import (
     voice_profile,
     voice_profile_for_model,
 )
+
+logger = logging.getLogger(__name__)
 
 
 RECOMMENDED_OLLAMA_MODELS = ["llama3.2:3b", "qwen3:4b", "gemma3:4b"]
@@ -75,7 +90,29 @@ class StatusResponse(BaseModel):
     focus_words_limit: int
     tts_enabled: bool
     llm_stream_enabled: bool
+    stt_device: str
+    stt_compute_type: str
+    piper_cuda: bool
     vad: VadSettings
+
+
+class ApiHealthResponse(BaseModel):
+    status: str
+    service: str
+    environment: str
+    langfuse_enabled: bool
+    evidently_enabled: bool
+    metrics_enabled: bool
+    prometheus_enabled: bool
+    grafana_enabled: bool
+
+
+class ObservabilityHealthResponse(ApiHealthResponse):
+    langfuse_configured: bool
+    ollama_status: str
+    stt_device: str
+    stt_compute_type: str
+    piper_cuda: bool
 
 
 class ChatRequest(BaseModel):
@@ -121,8 +158,16 @@ class SessionState:
     memory: ConversationMemory
 
 
+@dataclass
+class CachedSttEngine:
+    engine: SpeechToTextEngine
+    lock: Lock
+
+
 sessions: dict[str, SessionState] = {}
 sessions_lock = Lock()
+stt_engines: dict[tuple[str, str, str, str], CachedSttEngine] = {}
+stt_engines_lock = Lock()
 
 
 app = FastAPI(
@@ -130,6 +175,11 @@ app = FastAPI(
     description="Local FastAPI backend for the English voice tutor.",
     version="0.1.0",
 )
+
+try:
+    configure_logging(load_config())
+except ConfigError:
+    logging.basicConfig(level=logging.INFO)
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,6 +193,64 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    config = _load_config_or_500()
+    request_id = request.headers.get("X-Request-ID") or uuid4().hex
+    endpoint = request.url.path
+    started_at = perf_counter()
+    status_code = 500
+
+    with use_observability_context(
+        ObservabilityContext(request_id=request_id, endpoint=endpoint)
+    ):
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception:
+            latency_seconds = perf_counter() - started_at
+            if config.metrics_enabled and config.prometheus_enabled:
+                observe_fastapi_request(
+                    method=request.method,
+                    path=endpoint,
+                    status_code=status_code,
+                    latency_seconds=latency_seconds,
+                )
+            log_event(
+                logger,
+                "api_request",
+                config=config,
+                level=logging.ERROR,
+                method=request.method,
+                path=endpoint,
+                status_code=status_code,
+                latency_ms=round(latency_seconds * 1000, 2),
+                status="error",
+            )
+            raise
+
+        latency_seconds = perf_counter() - started_at
+        if config.metrics_enabled and config.prometheus_enabled:
+            observe_fastapi_request(
+                method=request.method,
+                path=endpoint,
+                status_code=status_code,
+                latency_seconds=latency_seconds,
+            )
+        log_event(
+            logger,
+            "api_request",
+            config=config,
+            method=request.method,
+            path=endpoint,
+            status_code=status_code,
+            latency_ms=round(latency_seconds * 1000, 2),
+            status="success" if status_code < 500 else "error",
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
 
 def _load_config_or_500() -> AppConfig:
@@ -224,11 +332,52 @@ def _synthesize_response(config: AppConfig, text: str, enable_tts: bool) -> tupl
     if not enable_tts or config.tts_engine in {"none", "off", "disabled"}:
         return None, None
 
+    started_at = perf_counter()
+    trace = get_langfuse_tracer()
     try:
         audio_path = TextToSpeechEngine(config).synthesize(text)
     except TextToSpeechError as exc:
+        latency_seconds = perf_counter() - started_at
+        if config.metrics_enabled and config.prometheus_enabled:
+            observe_tts_call(engine=config.tts_engine, status="error", latency_seconds=latency_seconds)
+        trace.log_span(
+            current_trace(),
+            name="tts",
+            metadata={"engine": config.tts_engine, "status": "error", "error": str(exc)},
+            started_at=started_at,
+        )
+        log_event(
+            logger,
+            "tts_call",
+            config=config,
+            engine=config.tts_engine,
+            status="error",
+            latency_ms=round(latency_seconds * 1000, 2),
+            error_message=str(exc),
+        )
         return None, str(exc)
 
+    latency_seconds = perf_counter() - started_at
+    if config.metrics_enabled and config.prometheus_enabled:
+        observe_tts_call(engine=config.tts_engine, status="success", latency_seconds=latency_seconds)
+    trace.log_span(
+        current_trace(),
+        name="tts",
+        input_value=maybe_response(text, config),
+        output_value=str(audio_path.name),
+        metadata={"engine": config.tts_engine, "piper_cuda": config.piper_cuda, "status": "success"},
+        started_at=started_at,
+    )
+    log_event(
+        logger,
+        "tts_call",
+        config=config,
+        engine=config.tts_engine,
+        piper_cuda=config.piper_cuda,
+        status="success",
+        latency_ms=round(latency_seconds * 1000, 2),
+        audio_file=audio_path.name,
+    )
     return f"/api/audio/{audio_path.name}", None
 
 
@@ -243,15 +392,71 @@ def _chat_response(
     pronunciation_feedback: str | None = None,
 ) -> ChatResponse:
     agent, state = _agent_for_request(config=config, session_id=session_id, mode=mode)
+    request_id = current_request_id() or uuid4().hex
+    user_id_hash = hash_identifier(config.user_display_name) if config.privacy_hash_user_id else None
+    tracer = get_langfuse_tracer()
+    trace = tracer.create_trace(
+        name="voice_tutor_chat",
+        request_id=request_id,
+        session_id=session_id,
+        user_id_hash=user_id_hash,
+        input_text=user_text,
+        metadata={
+            "service": config.service_name,
+            "environment": config.observability_env,
+            "endpoint": current_endpoint(),
+            "mode": mode,
+            "model": config.ollama_model,
+            "stt_model_name": stt_model_name,
+            "tts_enabled": enable_tts,
+        },
+    )
 
-    try:
-        tutor_response = agent.reply(user_text, stt_model_name=stt_model_name)
-    except OllamaError as exc:
-        raise HTTPException(status_code=503, detail=f"Ollama error: {exc}") from exc
+    with use_observability_context(
+        ObservabilityContext(
+            request_id=request_id,
+            endpoint=current_endpoint() or "chat",
+            session_id=session_id,
+            user_id_hash=user_id_hash,
+            trace=trace,
+        )
+    ):
+        started_at = perf_counter()
+        try:
+            tutor_response = agent.reply(user_text, stt_model_name=stt_model_name)
+        except OllamaError as exc:
+            tracer.update_trace(
+                trace,
+                metadata={"status": "error", "error_message": str(exc)},
+            )
+            raise HTTPException(status_code=503, detail=f"Ollama error: {exc}") from exc
 
-    _save_session_if_enabled(state, config)
-    voice = voice_profile_for_model(config, config.ollama_model)
-    audio_url, tts_error = _synthesize_response(config, tutor_response, enable_tts)
+        _save_session_if_enabled(state, config)
+        voice = voice_profile_for_model(config, config.ollama_model)
+        audio_url, tts_error = _synthesize_response(config, tutor_response, enable_tts)
+        latency_seconds = perf_counter() - started_at
+        tracer.update_trace(
+            trace,
+            output_text=tutor_response,
+            metadata={
+                "status": "success",
+                "latency_ms": round(latency_seconds * 1000, 2),
+                "tts_error": tts_error,
+            },
+        )
+        tracer.flush()
+        log_event(
+            logger,
+            "chat_turn",
+            config=config,
+            model=config.ollama_model,
+            mode=mode,
+            stt_model_name=stt_model_name,
+            tts_enabled=enable_tts,
+            tts_error=tts_error,
+            status="success",
+            latency_ms=round(latency_seconds * 1000, 2),
+        )
 
     return ChatResponse(
         session_id=session_id,
@@ -355,6 +560,9 @@ def get_status() -> StatusResponse:
         focus_words_limit=config.focus_words_limit,
         tts_enabled=config.tts_engine == "piper",
         llm_stream_enabled=config.llm_stream,
+        stt_device=config.stt_device,
+        stt_compute_type=config.stt_compute_type,
+        piper_cuda=config.piper_cuda,
         vad=VadSettings(
             energy_threshold=config.vad_energy_threshold,
             silence_seconds=config.vad_silence_seconds,
@@ -364,6 +572,74 @@ def get_status() -> StatusResponse:
             sample_rate=config.sample_rate,
         ),
     )
+
+
+def _api_health(config: AppConfig) -> ApiHealthResponse:
+    return ApiHealthResponse(
+        status="ok",
+        service=config.service_name,
+        environment=config.observability_env,
+        langfuse_enabled=config.langfuse_enabled,
+        evidently_enabled=config.evidently_enabled,
+        metrics_enabled=config.metrics_enabled,
+        prometheus_enabled=config.prometheus_enabled,
+        grafana_enabled=config.grafana_enabled,
+    )
+
+
+@app.get("/api/health", response_model=ApiHealthResponse)
+def get_api_health() -> ApiHealthResponse:
+    return _api_health(_load_config_or_500())
+
+
+@app.get("/api/observability/health", response_model=ObservabilityHealthResponse)
+def get_observability_health() -> ObservabilityHealthResponse:
+    config = _load_config_or_500()
+    ollama_status = "ok"
+    try:
+        OllamaClient(config).list_models()
+    except OllamaError:
+        ollama_status = "unavailable"
+
+    return ObservabilityHealthResponse(
+        **_api_health(config).model_dump(),
+        langfuse_configured=langfuse_credentials_configured(config),
+        ollama_status=ollama_status,
+        stt_device=config.stt_device,
+        stt_compute_type=config.stt_compute_type,
+        piper_cuda=config.piper_cuda,
+    )
+
+
+@app.get("/api/metrics")
+def get_api_metrics():
+    config = _load_config_or_500()
+    return metrics_response(config.metrics_enabled and config.prometheus_enabled)
+
+
+@app.get("/metrics")
+def get_metrics():
+    config = _load_config_or_500()
+    return metrics_response(config.metrics_enabled and config.prometheus_enabled)
+
+
+def _stt_engine_key(config: AppConfig) -> tuple[str, str, str, str]:
+    return (
+        config.stt_model_size,
+        config.stt_language,
+        config.stt_device,
+        config.stt_compute_type,
+    )
+
+
+def _get_stt_engine(config: AppConfig) -> CachedSttEngine:
+    key = _stt_engine_key(config)
+    with stt_engines_lock:
+        cached_engine = stt_engines.get(key)
+        if cached_engine is None:
+            cached_engine = CachedSttEngine(engine=SpeechToTextEngine(config), lock=Lock())
+            stt_engines[key] = cached_engine
+        return cached_engine
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -402,18 +678,57 @@ def post_voice(
     selected_session_id = _session_id(session_id)
     audio_path = _save_upload(config, file)
 
-    stt_engine = SpeechToTextEngine(config)
+    stt_engine = _get_stt_engine(config)
+    started_at = perf_counter()
     try:
-        transcription: TranscriptionResult = stt_engine.transcribe_detailed(audio_path)
+        with stt_engine.lock:
+            transcription: TranscriptionResult = stt_engine.engine.transcribe_detailed(audio_path)
     except SpeechToTextError as exc:
+        latency_seconds = perf_counter() - started_at
+        if config.metrics_enabled and config.prometheus_enabled:
+            observe_stt_call(
+                backend=stt_engine.engine.backend_name,
+                status="error",
+                latency_seconds=latency_seconds,
+            )
+        log_event(
+            logger,
+            "stt_call",
+            config=config,
+            session_id=selected_session_id,
+            backend=stt_engine.engine.backend_name,
+            device=config.stt_device,
+            compute_type=config.stt_compute_type,
+            status="error",
+            latency_ms=round(latency_seconds * 1000, 2),
+            error_message=str(exc),
+        )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    latency_seconds = perf_counter() - started_at
+    if config.metrics_enabled and config.prometheus_enabled:
+        observe_stt_call(
+            backend=stt_engine.engine.backend_name,
+            status="success",
+            latency_seconds=latency_seconds,
+        )
+    log_event(
+        logger,
+        "stt_call",
+        config=config,
+        session_id=selected_session_id,
+        backend=stt_engine.engine.backend_name,
+        device=config.stt_device,
+        compute_type=config.stt_compute_type,
+        status="success",
+        latency_ms=round(latency_seconds * 1000, 2),
+    )
 
     return _chat_response(
         config=config,
         session_id=selected_session_id,
         mode=parsed_mode,
         user_text=transcription.text,
-        stt_model_name=stt_engine.backend_name,
+        stt_model_name=stt_engine.engine.backend_name,
         enable_tts=enable_tts,
         pronunciation_feedback=transcription.pronunciation_feedback,
     )

@@ -1,0 +1,93 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "single", "sort": "none"}},
+      "targets": [{"expr": "sum(rate(llm_requests_total[5m])) by (model, status)", "legendFormat": "{{model}} {{status}", "refId": "A"}],
+      "title": "LLM Requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(llm_request_latency_seconds_bucket[5m])) by (le, model))", "legendFormat": "p95 {{model}}", "refId": "A"}],
+      "title": "LLM Latency p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "targets": [{"expr": "sum(rate(llm_errors_total[5m])) by (model)", "legendFormat": "{{model}}", "refId": "A"}],
+      "title": "LLM Errors",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "targets": [{"expr": "sum(rate(llm_tokens_output_total[5m])) by (model)", "legendFormat": "{{model}}", "refId": "A"}],
+      "title": "Output Tokens",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 5,
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(fastapi_request_latency_seconds_bucket[5m])) by (le, path))", "legendFormat": "p95 {{path}}", "refId": "A"}],
+      "title": "FastAPI Latency p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 6,
+      "targets": [{"expr": "sum(rate(stt_requests_total[5m])) by (backend, status)", "legendFormat": "{{backend}} {{status}", "refId": "A"}],
+      "title": "STT Requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "id": 7,
+      "targets": [{"expr": "sum(rate(tts_requests_total[5m])) by (engine, status)", "legendFormat": "{{engine}} {{status}", "refId": "A"}],
+      "title": "TTS Requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "id": 8,
+      "targets": [{"expr": "sum(rate(fastapi_errors_total[5m])) by (path, status_code)", "legendFormat": "{{path}} {{status_code}", "refId": "A"}],
+      "title": "FastAPI Errors",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["llmops", "english-voice-tutor"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "English Voice Tutor LLMOps",
+  "uid": "english-voice-tutor-llmops",
+  "version": 1,
+  "weekStart": ""
+}

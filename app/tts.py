@@ -18,6 +18,25 @@ class TextToSpeechError(RuntimeError):
     """Raised when text-to-speech synthesis fails."""
 
 
+def speech_text_from_markdown(text: str) -> str:
+    clean_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    clean_text = re.sub(r"^\s{0,3}#{1,6}\s+", "", clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r"^\s{0,3}[-*+]\s+", "", clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r"^\s{0,3}\d+[.)]\s+", "", clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r"^\s{0,3}>\s?", "", clean_text, flags=re.MULTILINE)
+    clean_text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean_text)
+    clean_text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean_text)
+    clean_text = re.sub(r"`([^`]+)`", r"\1", clean_text)
+    clean_text = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", clean_text)
+    clean_text = re.sub(r"__([^_\n]+)__", r"\1", clean_text)
+    clean_text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", clean_text)
+    clean_text = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"\1", clean_text)
+    clean_text = clean_text.replace("*", "")
+    clean_text = re.sub(r"[ \t]+", " ", clean_text)
+    clean_text = re.sub(r"\n{3,}", "\n\n", clean_text)
+    return clean_text.strip()
+
+
 class TextToSpeechEngine:
     """Text-to-speech backend powered by Piper."""
 
@@ -113,7 +132,7 @@ class TextToSpeechEngine:
                 "The Phase 3 backend currently supports `piper`."
             )
 
-        clean_text = text.strip()
+        clean_text = speech_text_from_markdown(text)
         if not clean_text:
             raise TextToSpeechError("Cannot synthesize empty text.")
 
@@ -130,6 +149,8 @@ class TextToSpeechEngine:
             "--output_file",
             str(output_path),
         ]
+        if self.config.piper_cuda:
+            command.insert(1, "--cuda")
 
         result = self._run_piper_command(command, clean_text)
 
@@ -141,6 +162,8 @@ class TextToSpeechEngine:
                 "--output_file",
                 str(output_path),
             ]
+            if self.config.piper_cuda:
+                fallback_command.insert(1, "--cuda")
             result = self._run_piper_command(fallback_command, clean_text)
 
         if result.returncode != 0:

@@ -23,6 +23,12 @@ data/audio_outputs/*
 !data/audio_outputs/.gitkeep
 data/vocabulary/*
 !data/vocabulary/.gitkeep
+data/evaluation/results/*
+!data/evaluation/results/.gitkeep
+data/reports/evidently/*
+!data/reports/evidently/.gitkeep
+data/logs/*
+!data/logs/.gitkeep
 
 models/
 *.onnx

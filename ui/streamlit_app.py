@@ -345,8 +345,8 @@ def main() -> None:
             vad_max_seconds = st.slider(
                 "Maximum recording length",
                 min_value=5.0,
-                max_value=90.0,
-                value=clamp_float(config.vad_max_seconds, 5.0, 90.0),
+                max_value=300.0,
+                value=clamp_float(config.vad_max_seconds, 5.0, 300.0),
                 step=1.0,
                 format="%.0f s",
             )

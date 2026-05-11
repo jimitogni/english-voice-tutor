@@ -3,7 +3,7 @@ import { addFocusWord, fetchStatus, removeFocusWord, resetSession, sendChat, sen
 import { ChatWindow } from "./components/ChatWindow";
 import { Sidebar } from "./components/Sidebar";
 import { VoiceDock } from "./components/VoiceDock";
-import type { ChatMessage, ChatResponse, StatusResponse, VoiceInfo } from "./types";
+import type { ChatMessage, ChatResponse, StatusResponse, VadSettings, VoiceInfo } from "./types";
 import "./styles.css";
 
 function uniqueValues(values: string[]): string[] {
@@ -48,6 +48,7 @@ export default function App() {
   const [selectedMode, setSelectedMode] = useState("free");
   const [selectedModel, setSelectedModel] = useState("");
   const [enableTts, setEnableTts] = useState(true);
+  const [vadSettings, setVadSettings] = useState<VadSettings | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export default function App() {
         setSelectedMode(payload.default_mode);
         setSelectedModel(payload.default_model);
         setEnableTts(payload.tts_enabled);
+        setVadSettings(payload.vad);
         if (payload.ollama_error) {
           setError(payload.ollama_error);
         }
@@ -180,10 +182,12 @@ export default function App() {
         onModelChange={setSelectedModel}
         onRemoveFocusWord={handleRemoveFocusWord}
         onReset={handleReset}
+        onVadChange={setVadSettings}
         selectedMode={selectedMode}
         selectedModel={selectedModel}
         selectedVoice={selectedVoice}
         userDisplayName={status.user_display_name}
+        vad={vadSettings ?? status.vad}
       />
       <main className="conversation-area">
         <ChatWindow
@@ -194,7 +198,7 @@ export default function App() {
           pending={busy}
           voiceLabel={enableTts ? selectedVoice?.label ?? null : null}
         />
-        <VoiceDock busy={busy} onSendAudio={handleSendAudio} onSendText={handleSendText} vad={status.vad} />
+        <VoiceDock busy={busy} onSendAudio={handleSendAudio} onSendText={handleSendText} vad={vadSettings ?? status.vad} />
       </main>
     </div>
   );

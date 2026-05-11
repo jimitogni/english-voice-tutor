@@ -41,7 +41,7 @@ services:
       context: .
       dockerfile: web/Dockerfile
       args:
-        VITE_BASE_PATH: ${WEB_BASE_PATH:-/}
+        VITE_BASE_PATH: ${WEB_BASE_PATH:-/english}
         VITE_API_BASE_URL: ${PUBLIC_API_BASE_URL:-}
     container_name: english-voice-tutor-web
     restart: unless-stopped

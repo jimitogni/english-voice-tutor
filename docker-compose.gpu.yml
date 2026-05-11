@@ -1,3 +1,11 @@
 services:
   ollama:
     gpus: all
+  api:
+    gpus: all
+    build:
+      args:
+        INSTALL_GPU_DEPS: "1"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility

@@ -6,6 +6,9 @@ from app.config import AppConfig, load_config
 from app.focus_words import FocusWordsError, FocusWordsStore
 from app.llm_client import OllamaClient
 from app.memory import ConversationMemory
+from app.observability import current_trace
+from app.observability.langfuse_client import get_langfuse_tracer
+from app.observability.privacy import sanitize_messages
 from app.prompts import TutorMode, get_starter_prompt, get_system_prompt
 
 
@@ -56,6 +59,16 @@ class EnglishTutorAgent:
 
     def reply(self, user_text: str, stt_model_name: str = "typed-input") -> str:
         messages = self.build_messages(user_text)
+        get_langfuse_tracer().log_span(
+            current_trace(),
+            name="prompt_construction",
+            output_value=sanitize_messages(messages, self.config),
+            metadata={
+                "mode": self.mode,
+                "history_turns": len(self.memory.turns),
+                "stt_model_name": stt_model_name,
+            },
+        )
         response = self.llm_client.chat(messages)
         self.memory.add_turn(
             user_text=user_text,
@@ -71,6 +84,16 @@ class EnglishTutorAgent:
         stt_model_name: str = "typed-input",
     ) -> Iterator[str]:
         messages = self.build_messages(user_text)
+        get_langfuse_tracer().log_span(
+            current_trace(),
+            name="prompt_construction",
+            output_value=sanitize_messages(messages, self.config),
+            metadata={
+                "mode": self.mode,
+                "history_turns": len(self.memory.turns),
+                "stt_model_name": stt_model_name,
+            },
+        )
         chunks: list[str] = []
 
         for chunk in self.llm_client.chat_stream(messages):
