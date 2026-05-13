@@ -17,6 +17,7 @@ FALSE_VALUES = {"0", "false", "no", "n", "off"}
 STT_MODEL_SIZES = {"tiny", "base", "small", "medium"}
 STT_DEVICES = {"cpu", "cuda", "auto"}
 RECORD_MODES = {"fixed", "vad"}
+RAG_VECTOR_DBS = {"qdrant"}
 
 
 class ConfigError(ValueError):
@@ -74,6 +75,18 @@ class AppConfig:
     privacy_redact_prompts: bool
     privacy_redact_responses: bool
     privacy_hash_user_id: bool
+    rag_enabled: bool
+    rag_vector_db: str
+    rag_embedding_model: str
+    rag_top_k: int
+    rag_score_threshold: float
+    rag_chunk_chars: int
+    rag_chunk_overlap: int
+    rag_context_char_limit: int
+    rag_request_timeout_seconds: float
+    qdrant_url: str
+    qdrant_collection: str
+    knowledge_dir: Path
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -126,6 +139,13 @@ def _get_positive_float(name: str, default: float) -> float:
     value = _get_float(name, default)
     if value <= 0:
         raise ConfigError(f"{name} must be greater than zero. Got {value!r}.")
+    return value
+
+
+def _get_non_negative_float(name: str, default: float) -> float:
+    value = _get_float(name, default)
+    if value < 0:
+        raise ConfigError(f"{name} must be greater than or equal to zero. Got {value!r}.")
     return value
 
 
@@ -211,4 +231,19 @@ def load_config() -> AppConfig:
         privacy_redact_prompts=_get_bool("PRIVACY_REDACT_PROMPTS", False),
         privacy_redact_responses=_get_bool("PRIVACY_REDACT_RESPONSES", False),
         privacy_hash_user_id=_get_bool("PRIVACY_HASH_USER_ID", True),
+        rag_enabled=_get_bool("RAG_ENABLED", False),
+        rag_vector_db=_get_choice("RAG_VECTOR_DB", "qdrant", RAG_VECTOR_DBS),
+        rag_embedding_model=_get_non_empty("RAG_EMBEDDING_MODEL", "embeddinggemma"),
+        rag_top_k=_get_positive_int("RAG_TOP_K", 4),
+        rag_score_threshold=_get_non_negative_float("RAG_SCORE_THRESHOLD", 0.25),
+        rag_chunk_chars=_get_positive_int("RAG_CHUNK_CHARS", 900),
+        rag_chunk_overlap=_get_positive_int("RAG_CHUNK_OVERLAP", 120),
+        rag_context_char_limit=_get_positive_int("RAG_CONTEXT_CHAR_LIMIT", 3500),
+        rag_request_timeout_seconds=_get_positive_float("RAG_REQUEST_TIMEOUT_SECONDS", 30.0),
+        qdrant_url=_get_non_empty("QDRANT_URL", "http://localhost:6333").rstrip("/"),
+        qdrant_collection=_get_non_empty("QDRANT_COLLECTION", "english_voice_tutor_knowledge"),
+        knowledge_dir=resolve_project_path(
+            project_root,
+            os.getenv("KNOWLEDGE_DIR", "./data/knowledge"),
+        ),
     )

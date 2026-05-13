@@ -37,6 +37,9 @@ class EvaluationRecord:
     question_length_chars: int
     expected_keyword_coverage: float
     retrieval_count: int
+    retrieval_error: str | None
+    retrieval_score_max: float
+    retrieval_score_mean: float
 
 
 def load_dataset(path: Path) -> list[dict[str, Any]]:
@@ -72,7 +75,10 @@ def evaluate_dataset(
         started_at = perf_counter()
         answer = ""
         sources: list[str] = []
+        source_scores: list[float] = []
+        response_retrieval_count: int | None = None
         error: str | None = None
+        retrieval_error: str | None = None
         response_model = model_name
         try:
             response = requests.post(
@@ -85,11 +91,17 @@ def evaluate_dataset(
             data = response.json()
             answer = str(data.get("tutor_response", ""))
             response_model = str(data.get("model_name") or response_model or "")
+            sources = parse_sources(data.get("sources"))
+            source_scores = parse_source_scores(data.get("sources"))
+            response_retrieval_count = parse_optional_int(data.get("retrieval_count"))
+            raw_retrieval_error = data.get("retrieval_error")
+            retrieval_error = raw_retrieval_error if isinstance(raw_retrieval_error, str) else None
         except Exception as exc:  # pragma: no cover - depends on live API.
             error = str(exc)
 
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         lowered_answer = answer.lower()
+        retrieval_count = response_retrieval_count if response_retrieval_count is not None else len(sources)
         results.append(
             EvaluationRecord(
                 request_id=request_id,
@@ -112,7 +124,12 @@ def evaluate_dataset(
                 response_length_chars=len(answer),
                 question_length_chars=len(question),
                 expected_keyword_coverage=keyword_coverage(answer, expected_keywords),
-                retrieval_count=0,
+                retrieval_count=retrieval_count,
+                retrieval_error=retrieval_error,
+                retrieval_score_max=max(source_scores) if source_scores else 0.0,
+                retrieval_score_mean=round(sum(source_scores) / len(source_scores), 4)
+                if source_scores
+                else 0.0,
             )
         )
 
@@ -135,6 +152,50 @@ def keyword_coverage(answer: str, expected_keywords: list[str]) -> float:
     lowered_answer = answer.lower()
     matched = sum(1 for keyword in expected_keywords if keyword.lower() in lowered_answer)
     return round(matched / len(expected_keywords), 4)
+
+
+def parse_sources(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    sources: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        title = item.get("title")
+        if isinstance(source, str) and source:
+            sources.append(source)
+        elif isinstance(title, str) and title:
+            sources.append(title)
+    return sources
+
+
+def parse_source_scores(value: Any) -> list[float]:
+    if not isinstance(value, list):
+        return []
+
+    scores: list[float] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        score = item.get("score")
+        if score is None:
+            continue
+        try:
+            scores.append(float(score))
+        except (TypeError, ValueError):
+            continue
+    return scores
+
+
+def parse_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def save_results(results: list[EvaluationRecord], output_dir: Path) -> tuple[Path, Path]:
@@ -178,7 +239,17 @@ def send_scores_to_langfuse(results: list[EvaluationRecord]) -> None:
             trace_id=result.request_id,
             name="retrieval_count",
             value=result.retrieval_count,
-            comment="English Voice Tutor currently does not use RAG retrieval.",
+            comment="Number of RAG chunks returned by the API for this evaluation request.",
+        )
+        tracer.score(
+            trace_id=result.request_id,
+            name="retrieval_score_max",
+            value=result.retrieval_score_max,
+        )
+        tracer.score(
+            trace_id=result.request_id,
+            name="retrieval_error_flag",
+            value=1 if result.retrieval_error else 0,
         )
     tracer.flush()
 

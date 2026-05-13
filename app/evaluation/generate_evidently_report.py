@@ -83,11 +83,32 @@ def _manual_quality_report(records: list[dict[str, Any]]) -> str:
 
 
 def _manual_rag_report(records: list[dict[str, Any]]) -> str:
+    total = len(records)
+    retrieval_counts = [int(record.get("retrieval_count", 0) or 0) for record in records]
+    errors = sum(1 for record in records if record.get("retrieval_error"))
+    score_max = _safe_mean(record.get("retrieval_score_max", 0.0) for record in records)
+    rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(record.get('category', '')))}</td>"
+        f"<td>{html.escape(str(record.get('question', '')))}</td>"
+        f"<td>{record.get('retrieval_count', 0)}</td>"
+        f"<td>{record.get('retrieval_score_max', 0)}</td>"
+        f"<td>{html.escape(', '.join(str(source) for source in record.get('sources', []))[:300])}</td>"
+        f"<td>{html.escape(str(record.get('retrieval_error') or ''))}</td>"
+        "</tr>"
+        for record in records
+    )
     return _page(
         "English Voice Tutor Retrieval Report",
-        """
-        <p>This project is a voice tutor and does not currently use RAG retrieval.</p>
-        <p>The evaluation schema keeps <code>retrieval_count</code> for future compatibility.</p>
+        f"""
+        <p>Total records: {total}</p>
+        <p>Mean retrieved chunks: {_safe_mean(retrieval_counts):.2f}</p>
+        <p>Mean max retrieval score: {score_max:.2f}</p>
+        <p>Retrieval errors: {errors}</p>
+        <table>
+          <thead><tr><th>Category</th><th>Question</th><th>Chunks</th><th>Max Score</th><th>Sources</th><th>Error</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
         """,
     )
 

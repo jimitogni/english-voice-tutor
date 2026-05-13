@@ -48,3 +48,7 @@ echo "https api ok"
 echo "Checking Ollama inside Docker"
 docker compose --env-file .env.homelab exec -T ollama ollama list >/dev/null
 echo "ollama ok"
+
+echo "Checking Qdrant locally"
+curl -fsS "http://127.0.0.1:${QDRANT_PORT:-6333}/healthz" >/dev/null
+echo "qdrant ok"

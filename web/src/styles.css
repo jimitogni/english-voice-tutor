@@ -508,6 +508,27 @@ select:focus,
   font-size: 0.9rem;
 }
 
+.source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.source-chip {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #d8e2e6;
+  border-radius: 8px;
+  background: #f5f8f8;
+  padding: 4px 8px;
+  color: #48515a;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .answer-audio {
   width: 100%;
   margin-top: 12px;

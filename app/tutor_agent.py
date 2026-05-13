@@ -10,6 +10,7 @@ from app.observability import current_trace
 from app.observability.langfuse_client import get_langfuse_tracer
 from app.observability.privacy import sanitize_messages
 from app.prompts import TutorMode, get_starter_prompt, get_system_prompt
+from app.rag import RagRetriever, RetrievalContext, format_retrieval_context
 
 
 class EnglishTutorAgent:
@@ -19,11 +20,19 @@ class EnglishTutorAgent:
         memory: ConversationMemory | None = None,
         config: AppConfig | None = None,
         mode: TutorMode = "free",
+        rag_retriever: RagRetriever | None = None,
     ) -> None:
         self.config = config or load_config()
         self.llm_client = llm_client or OllamaClient(self.config)
         self.memory = memory or ConversationMemory(self.config)
         self.mode = mode
+        self.rag_retriever = rag_retriever or (
+            RagRetriever(self.config) if self.config.rag_enabled else None
+        )
+        self.last_retrieval = RetrievalContext(
+            sources=[],
+            vector_db=self.config.rag_vector_db,
+        )
 
     def _focus_words_prompt(self) -> str | None:
         try:
@@ -53,6 +62,19 @@ class EnglishTutorAgent:
             system_prompt = f"{system_prompt}\n\n{focus_words_prompt}"
 
         messages = [{"role": "system", "content": system_prompt}]
+        self.last_retrieval = RetrievalContext(
+            sources=[],
+            vector_db=self.config.rag_vector_db,
+        )
+        if self.rag_retriever is not None:
+            self.last_retrieval = self.rag_retriever.retrieve(user_text)
+            retrieval_prompt = format_retrieval_context(
+                self.last_retrieval.sources,
+                max_chars=self.config.rag_context_char_limit,
+            )
+            if retrieval_prompt:
+                messages.append({"role": "system", "content": retrieval_prompt})
+
         messages.extend(self.memory.chat_messages())
         messages.append({"role": "user", "content": user_text})
         return messages
@@ -67,6 +89,8 @@ class EnglishTutorAgent:
                 "mode": self.mode,
                 "history_turns": len(self.memory.turns),
                 "stt_model_name": stt_model_name,
+                "retrieval_count": self.last_retrieval.count,
+                "retrieval_error": self.last_retrieval.error,
             },
         )
         response = self.llm_client.chat(messages)
@@ -92,6 +116,8 @@ class EnglishTutorAgent:
                 "mode": self.mode,
                 "history_turns": len(self.memory.turns),
                 "stt_model_name": stt_model_name,
+                "retrieval_count": self.last_retrieval.count,
+                "retrieval_error": self.last_retrieval.error,
             },
         )
         chunks: list[str] = []

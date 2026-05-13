@@ -56,6 +56,18 @@ export function ChatWindow({
                 <div className="feedback-note">{message.pronunciationFeedback}</div>
               )}
               {message.ttsError && <div className="feedback-note warning">{message.ttsError}</div>}
+              {message.retrievalError && (
+                <div className="feedback-note warning">Retrieval unavailable: {message.retrievalError}</div>
+              )}
+              {message.sources && message.sources.length > 0 && (
+                <div className="source-list">
+                  {message.sources.map((source, index) => (
+                    <span className="source-chip" key={`${message.id}_${source.source}_${index}`}>
+                      {source.title}
+                    </span>
+                  ))}
+                </div>
+              )}
               {message.audioUrl && (
                 <audio className="answer-audio" controls autoPlay src={absoluteAudioUrl(message.audioUrl)} />
               )}

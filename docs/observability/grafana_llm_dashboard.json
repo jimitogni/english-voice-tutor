@@ -79,6 +79,36 @@
       "targets": [{"expr": "sum(rate(fastapi_errors_total[5m])) by (path, status_code)", "legendFormat": "{{path}} {{status_code}", "refId": "A"}],
       "title": "FastAPI Errors",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
+      "id": 9,
+      "targets": [{"expr": "sum(rate(rag_retrievals_total[5m])) by (vector_db, status)", "legendFormat": "{{vector_db}} {{status}", "refId": "A"}],
+      "title": "RAG Retrievals",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
+      "id": 10,
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(rag_retrieval_latency_seconds_bucket[5m])) by (le, vector_db))", "legendFormat": "p95 {{vector_db}}", "refId": "A"},
+        {"expr": "sum(rate(rag_retrieval_results_sum[5m])) / sum(rate(rag_retrieval_results_count[5m]))", "legendFormat": "mean chunks", "refId": "B"}
+      ],
+      "title": "RAG Latency And Results",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
+      "id": 11,
+      "targets": [{"expr": "sum(rate(embedding_requests_total[5m])) by (model, status)", "legendFormat": "{{model}} {{status}", "refId": "A"}],
+      "title": "Embedding Requests",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

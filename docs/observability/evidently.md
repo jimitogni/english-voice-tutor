@@ -29,7 +29,10 @@ data/reports/evidently/evidently_rag_monitoring_report.html
 data/reports/evidently/evidently_latency_report.html
 ```
 
-English Voice Tutor is not a RAG app today, so retrieval quality is marked as not applicable. The schema keeps `retrieval_count` for future use.
+English Voice Tutor now supports optional local RAG. When `RAG_ENABLED=true`
+and the Qdrant collection has been indexed, `/api/chat` returns retrieved
+sources and retrieval counts. When retrieval is disabled or no collection exists,
+retrieval count remains `0` and the normal tutor flow still works.
 
 Current custom checks:
 
@@ -42,3 +45,6 @@ Current custom checks:
 - response length
 - question length
 - expected keyword coverage
+- retrieval count
+- retrieval error
+- max and mean retrieval score

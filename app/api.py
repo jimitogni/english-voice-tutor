@@ -32,6 +32,7 @@ from app.observability.metrics import (
 )
 from app.observability.privacy import hash_identifier, maybe_response
 from app.prompts import TutorMode, available_modes, get_mode_definition
+from app.rag import RagSource
 from app.stt import SpeechToTextEngine, SpeechToTextError, TranscriptionResult
 from app.tts import TextToSpeechEngine, TextToSpeechError
 from app.tutor_agent import EnglishTutorAgent
@@ -74,6 +75,17 @@ class VadSettings(BaseModel):
     sample_rate: int
 
 
+class RagStatus(BaseModel):
+    enabled: bool
+    vector_db: str
+    embedding_model: str
+    collection: str
+    top_k: int
+    score_threshold: float
+    qdrant_url: str
+    knowledge_dir: str
+
+
 class StatusResponse(BaseModel):
     assistant_name: str
     user_display_name: str
@@ -94,6 +106,7 @@ class StatusResponse(BaseModel):
     stt_compute_type: str
     piper_cuda: bool
     vad: VadSettings
+    rag: RagStatus
 
 
 class ApiHealthResponse(BaseModel):
@@ -123,6 +136,13 @@ class ChatRequest(BaseModel):
     enable_tts: bool = True
 
 
+class RagSourceInfo(BaseModel):
+    title: str
+    source: str
+    score: float | None = None
+    content_preview: str
+
+
 class ChatResponse(BaseModel):
     session_id: str
     mode: str
@@ -133,6 +153,9 @@ class ChatResponse(BaseModel):
     audio_url: str | None = None
     tts_error: str | None = None
     pronunciation_feedback: str | None = None
+    sources: list[RagSourceInfo] = Field(default_factory=list)
+    retrieval_count: int = 0
+    retrieval_error: str | None = None
 
 
 class FocusWordsResponse(BaseModel):
@@ -267,6 +290,18 @@ def _voice_info(profile: PiperVoiceProfile) -> VoiceInfo:
         model_path=str(profile.model_path),
         config_path=str(profile.config_path),
         available=profile.is_available,
+    )
+
+
+def _rag_source_info(source: RagSource) -> RagSourceInfo:
+    preview = " ".join(source.content.split())
+    if len(preview) > 280:
+        preview = f"{preview[:277].rstrip()}..."
+    return RagSourceInfo(
+        title=source.title,
+        source=source.source,
+        score=source.score,
+        content_preview=preview,
     )
 
 
@@ -432,6 +467,7 @@ def _chat_response(
             raise HTTPException(status_code=503, detail=f"Ollama error: {exc}") from exc
 
         _save_session_if_enabled(state, config)
+        retrieval = agent.last_retrieval
         voice = voice_profile_for_model(config, config.ollama_model)
         audio_url, tts_error = _synthesize_response(config, tutor_response, enable_tts)
         latency_seconds = perf_counter() - started_at
@@ -442,6 +478,8 @@ def _chat_response(
                 "status": "success",
                 "latency_ms": round(latency_seconds * 1000, 2),
                 "tts_error": tts_error,
+                "retrieval_count": retrieval.count,
+                "retrieval_error": retrieval.error,
             },
         )
         tracer.flush()
@@ -454,6 +492,8 @@ def _chat_response(
             stt_model_name=stt_model_name,
             tts_enabled=enable_tts,
             tts_error=tts_error,
+            retrieval_count=retrieval.count,
+            retrieval_error=retrieval.error,
             status="success",
             latency_ms=round(latency_seconds * 1000, 2),
         )
@@ -468,6 +508,9 @@ def _chat_response(
         audio_url=audio_url,
         tts_error=tts_error,
         pronunciation_feedback=pronunciation_feedback,
+        sources=[_rag_source_info(source) for source in retrieval.sources],
+        retrieval_count=retrieval.count,
+        retrieval_error=retrieval.error,
     )
 
 
@@ -570,6 +613,16 @@ def get_status() -> StatusResponse:
             max_seconds=config.vad_max_seconds,
             chunk_ms=config.vad_chunk_ms,
             sample_rate=config.sample_rate,
+        ),
+        rag=RagStatus(
+            enabled=config.rag_enabled,
+            vector_db=config.rag_vector_db,
+            embedding_model=config.rag_embedding_model,
+            collection=config.qdrant_collection,
+            top_k=config.rag_top_k,
+            score_threshold=config.rag_score_threshold,
+            qdrant_url=config.qdrant_url,
+            knowledge_dir=str(config.knowledge_dir),
         ),
     )
 

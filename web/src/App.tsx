@@ -30,6 +30,9 @@ function assistantMessage(response: ChatResponse): ChatMessage {
     voiceLabel: response.voice?.label,
     audioUrl: response.audio_url,
     ttsError: response.tts_error,
+    sources: response.sources,
+    retrievalCount: response.retrieval_count,
+    retrievalError: response.retrieval_error,
   };
 }
 

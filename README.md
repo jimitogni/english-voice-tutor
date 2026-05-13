@@ -48,6 +48,8 @@ Implemented through Phase 6:
 - React frontend with fixed sidebar, scrollable chat, bottom voice dock, and auto-scroll
 - Docker Compose web stack
 - Optional JSON conversation saving
+- Optional local RAG with Ollama embeddings and Qdrant
+- RAG retrieval metrics in Prometheus and Evidently-compatible reports
 - Ollama check script
 - Typed full-loop test script
 
@@ -57,6 +59,7 @@ Implemented through Phase 6:
 - Python 3.10+
 - Ollama installed and running locally
 - One local model pulled with Ollama, such as `llama3.2:3b` or `qwen2.5:3b`
+- Optional: one local embedding model pulled with Ollama, such as `embeddinggemma`
 - A working microphone
 - PortAudio runtime libraries for `sounddevice`
 - Piper TTS and a downloaded Piper voice model
@@ -137,6 +140,12 @@ Pull a local model:
 ```bash
 ollama pull llama3.2:3b
 ollama pull qwen2.5:3b
+```
+
+Pull the default local embedding model if you enable RAG:
+
+```bash
+ollama pull embeddinggemma
 ```
 
 Other possible models:
@@ -271,6 +280,14 @@ PIPER_EXECUTABLE=piper
 PIPER_MODEL_PATH=./models/piper/en_US-lessac-medium.onnx
 PIPER_CONFIG_PATH=./models/piper/en_US-lessac-medium.onnx.json
 SAVE_CONVERSATIONS=true
+RAG_ENABLED=false
+RAG_VECTOR_DB=qdrant
+RAG_EMBEDDING_MODEL=embeddinggemma
+RAG_TOP_K=4
+RAG_SCORE_THRESHOLD=0.25
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=english_voice_tutor_knowledge
+KNOWLEDGE_DIR=./data/knowledge
 ```
 
 `ASSISTANT_NAME` tells the tutor what name to respond to. With the default
@@ -322,6 +339,45 @@ Or set:
 ```env
 SAVE_CONVERSATIONS=false
 ```
+
+## Local RAG Knowledge
+
+RAG is optional and uses local Ollama embeddings plus Qdrant. Add private notes,
+interview examples, grammar explanations, or vocabulary material under:
+
+```text
+data/knowledge/
+```
+
+Supported file types are `.md`, `.txt`, `.json`, `.jsonl`, and `.csv`.
+The folder contents are ignored by git by default.
+
+Start Qdrant locally with Docker Compose, pull the embedding model, then index
+the knowledge folder:
+
+```bash
+docker compose up -d qdrant
+ollama pull embeddinggemma
+python scripts/index_rag_knowledge.py --reset
+```
+
+Enable retrieval in `.env`:
+
+```env
+RAG_ENABLED=true
+QDRANT_URL=http://localhost:6333
+```
+
+For the homelab container stack, run the indexer inside the API container so it
+uses the internal `http://qdrant:6333` service URL:
+
+```bash
+docker compose --env-file .env.homelab exec -T api python scripts/index_rag_knowledge.py --reset
+```
+
+If the Qdrant collection has not been created yet, the tutor skips retrieval and
+continues normal chat. API chat responses include `sources`,
+`retrieval_count`, and `retrieval_error` fields for evaluation and debugging.
 
 ## Tutor Modes
 
@@ -668,12 +724,14 @@ Services:
 - `web`: Nginx serves the built React app and proxies `/api` to FastAPI.
 - `api`: FastAPI runs STT, tutor orchestration, Piper TTS, focus words, and conversation saving.
 - `ollama`: Ollama stores local LLM models in a named Docker volume.
+- `qdrant`: Qdrant stores local RAG vectors in a named Docker volume.
 
 Persistent paths:
 
 - Ollama models: Docker volume `ollama`
+- Qdrant vectors: Docker volume `qdrant`
 - Piper voice models: `./models`
-- conversations, vocabulary, generated audio, uploaded audio: `./data`
+- conversations, vocabulary, RAG knowledge, generated audio, uploaded audio: `./data`
 
 On a fresh Debian/Ubuntu homelab server, install Docker first:
 
@@ -695,6 +753,7 @@ The deploy script:
 - builds the API and React containers
 - starts Ollama, API, and web services
 - pulls `OLLAMA_MODEL` plus `EXTRA_OLLAMA_MODELS`
+- pulls `RAG_EMBEDDING_MODEL` when `RAG_ENABLED=true`
 - runs a health check
 
 Default local homelab URLs:
@@ -703,6 +762,7 @@ Default local homelab URLs:
 http://localhost:8080        React UI
 http://localhost:8000/docs   FastAPI docs
 http://localhost:11434       Ollama API
+http://localhost:6333        Qdrant API/dashboard
 ```
 
 From another computer on your LAN, use your server IP:
@@ -768,7 +828,7 @@ English Voice Tutor includes optional observability for the homelab deployment:
 - Langfuse tracing for chat requests, prompt construction, Ollama generations, TTS spans, model names, session IDs, request IDs, latency, and token counts when Ollama returns them.
 - Prometheus metrics at `/english/api/metrics`.
 - Grafana dashboard JSON at `docs/observability/grafana_llm_dashboard.json`.
-- Evidently-compatible evaluation reports under `data/reports/evidently`.
+- Evidently-compatible quality, retrieval, and latency reports under `data/reports/evidently`.
 - Structured JSON logs when `LOG_JSON=true`.
 
 Langfuse was not installed on the server when this was added, so `LANGFUSE_ENABLED=false`
@@ -1028,6 +1088,8 @@ because Vite proxies `/api` to `http://127.0.0.1:8000`.
 - Streaming TTS: sentence-by-sentence Piper synthesis in the terminal.
 - Pronunciation feedback: lightweight notes from Whisper segment confidence and
   silence probability.
+- Local RAG: Ollama embeddings plus Qdrant retrieval over files in
+  `data/knowledge/`.
 - Docker Compose: homelab stack with Ollama, FastAPI, React/Nginx, and mounted model/data folders.
 - Web interfaces: Streamlit UI and React UI for typed chat, silence-based
   browser microphone recording, mode/model selection, focus words, and generated

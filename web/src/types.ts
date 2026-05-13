@@ -21,6 +21,17 @@ export interface VadSettings {
   sample_rate: number;
 }
 
+export interface RagStatus {
+  enabled: boolean;
+  vector_db: string;
+  embedding_model: string;
+  collection: string;
+  top_k: number;
+  score_threshold: number;
+  qdrant_url: string;
+  knowledge_dir: string;
+}
+
 export interface StatusResponse {
   assistant_name: string;
   user_display_name: string;
@@ -41,6 +52,14 @@ export interface StatusResponse {
   stt_compute_type: string;
   piper_cuda: boolean;
   vad: VadSettings;
+  rag: RagStatus;
+}
+
+export interface RagSourceInfo {
+  title: string;
+  source: string;
+  score: number | null;
+  content_preview: string;
 }
 
 export interface ChatResponse {
@@ -53,6 +72,9 @@ export interface ChatResponse {
   audio_url: string | null;
   tts_error: string | null;
   pronunciation_feedback: string | null;
+  sources: RagSourceInfo[];
+  retrieval_count: number;
+  retrieval_error: string | null;
 }
 
 export interface FocusWordsResponse {
@@ -71,4 +93,7 @@ export interface ChatMessage {
   audioUrl?: string | null;
   pronunciationFeedback?: string | null;
   ttsError?: string | null;
+  sources?: RagSourceInfo[];
+  retrievalCount?: number;
+  retrievalError?: string | null;
 }

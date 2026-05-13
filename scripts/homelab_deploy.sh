@@ -15,7 +15,7 @@ if [[ ! -f .env.homelab ]]; then
   echo "Review it before exposing this service beyond your LAN."
 fi
 
-mkdir -p data/audio_inputs data/audio_outputs data/conversations data/vocabulary models/piper
+mkdir -p data/audio_inputs data/audio_outputs data/conversations data/knowledge data/vocabulary models/piper
 
 if [[ "${SKIP_PIPER_DOWNLOAD:-0}" != "1" ]]; then
   bash scripts/homelab_download_piper_voices.sh
@@ -48,6 +48,11 @@ if [[ "${SKIP_OLLAMA_PULL:-0}" != "1" ]]; then
     echo "Pulling Ollama model: $model"
     docker compose "${compose_args[@]}" exec -T ollama ollama pull "$model"
   done
+
+  if [[ "${RAG_ENABLED:-false}" == "true" && -n "${RAG_EMBEDDING_MODEL:-}" ]]; then
+    echo "Pulling Ollama embedding model: ${RAG_EMBEDDING_MODEL}"
+    docker compose "${compose_args[@]}" exec -T ollama ollama pull "$RAG_EMBEDDING_MODEL"
+  fi
 fi
 
 bash scripts/homelab_health.sh

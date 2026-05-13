@@ -117,6 +117,45 @@ TTS_REQUEST_LATENCY_SECONDS = Histogram(
     registry=REGISTRY,
 )
 
+EMBEDDING_REQUESTS_TOTAL = Counter(
+    "embedding_requests_total",
+    "Total embedding model requests.",
+    ["model", "provider", "status"],
+    registry=REGISTRY,
+)
+EMBEDDING_REQUEST_LATENCY_SECONDS = Histogram(
+    "embedding_request_latency_seconds",
+    "Embedding model request latency in seconds.",
+    ["model", "provider"],
+    registry=REGISTRY,
+)
+EMBEDDING_INPUTS_TOTAL = Counter(
+    "embedding_inputs_total",
+    "Total texts sent to embedding models.",
+    ["model", "provider"],
+    registry=REGISTRY,
+)
+
+RAG_RETRIEVALS_TOTAL = Counter(
+    "rag_retrievals_total",
+    "Total RAG retrieval attempts.",
+    ["vector_db", "status"],
+    registry=REGISTRY,
+)
+RAG_RETRIEVAL_LATENCY_SECONDS = Histogram(
+    "rag_retrieval_latency_seconds",
+    "RAG retrieval latency in seconds.",
+    ["vector_db"],
+    registry=REGISTRY,
+)
+RAG_RETRIEVAL_RESULTS = Histogram(
+    "rag_retrieval_results",
+    "Number of retrieved RAG chunks per retrieval attempt.",
+    ["vector_db"],
+    buckets=(0, 1, 2, 3, 4, 6, 8, 10),
+    registry=REGISTRY,
+)
+
 
 def observe_fastapi_request(
     *,
@@ -160,6 +199,32 @@ def observe_stt_call(*, backend: str, status: str, latency_seconds: float) -> No
 def observe_tts_call(*, engine: str, status: str, latency_seconds: float) -> None:
     TTS_REQUESTS_TOTAL.labels(engine, status).inc()
     TTS_REQUEST_LATENCY_SECONDS.labels(engine).observe(latency_seconds)
+
+
+def observe_embedding_call(
+    *,
+    model: str,
+    provider: str,
+    status: str,
+    latency_seconds: float,
+    input_count: int,
+) -> None:
+    EMBEDDING_REQUESTS_TOTAL.labels(model, provider, status).inc()
+    EMBEDDING_REQUEST_LATENCY_SECONDS.labels(model, provider).observe(latency_seconds)
+    if status == "success":
+        EMBEDDING_INPUTS_TOTAL.labels(model, provider).inc(max(input_count, 0))
+
+
+def observe_rag_retrieval(
+    *,
+    vector_db: str,
+    status: str,
+    latency_seconds: float,
+    result_count: int,
+) -> None:
+    RAG_RETRIEVALS_TOTAL.labels(vector_db, status).inc()
+    RAG_RETRIEVAL_LATENCY_SECONDS.labels(vector_db).observe(latency_seconds)
+    RAG_RETRIEVAL_RESULTS.labels(vector_db).observe(max(result_count, 0))
 
 
 def metrics_response(enabled: bool) -> Response:

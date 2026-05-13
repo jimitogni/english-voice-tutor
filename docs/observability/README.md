@@ -3,8 +3,8 @@
 This project now has app-side hooks for:
 
 - Langfuse traces for chat requests, prompt construction, Ollama generations, and TTS.
-- Prometheus metrics exposed at `/api/metrics`.
-- Evidently-compatible offline evaluation reports saved under `data/reports/evidently`.
+- Prometheus metrics exposed at `/api/metrics`, including optional RAG retrieval and embedding counters.
+- Evidently-compatible offline evaluation reports saved under `data/reports/evidently`, including retrieval counts and scores when RAG is enabled.
 - Structured JSON logs with request IDs, session IDs, latency, model name, and status.
 
 The homelab already has Grafana and Prometheus running in the `customer-churn-propensity-mlops` stack. Langfuse was not detected, so the client is disabled by default until a private Langfuse instance and project API keys are configured.

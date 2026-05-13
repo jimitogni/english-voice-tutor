@@ -11,6 +11,15 @@ services:
       timeout: 10s
       retries: 5
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: english-voice-tutor-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant:/qdrant/storage
+
   api:
     build:
       context: .
@@ -21,6 +30,8 @@ services:
       - .env.homelab
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
+      KNOWLEDGE_DIR: /app/data/knowledge
       PIPER_EXECUTABLE: piper
       PIPER_MODEL_PATH: /app/models/piper/en_US-lessac-medium.onnx
       PIPER_CONFIG_PATH: /app/models/piper/en_US-lessac-medium.onnx.json
@@ -29,6 +40,8 @@ services:
       - ./models:/app/models
     depends_on:
       ollama:
+        condition: service_started
+      qdrant:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/status"]
@@ -68,6 +81,7 @@ services:
 
 volumes:
   ollama:
+  qdrant:
 
 networks:
   proxy:
