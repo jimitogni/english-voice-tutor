@@ -12,7 +12,7 @@ from app.evaluation.generate_evidently_report import generate_reports
 
 
 def main() -> None:
-    dataset_path = Path("data/evaluation/datasets/sample_questions.jsonl")
+    dataset_path = Path("evals/english_practice_eval.jsonl")
     results = evaluate_dataset(
         dataset_path=dataset_path,
         api_base_url="http://localhost/english",

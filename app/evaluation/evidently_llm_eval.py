@@ -3,53 +3,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import requests
 
+from app.evaluation.models import EvaluationRecord, ToolCallRecord
+from app.evaluation.service import EvaluationService
 from app.observability.langfuse_client import get_langfuse_tracer
 
 
-@dataclass(frozen=True)
-class EvaluationRecord:
-    request_id: str
-    timestamp: str
-    question: str
-    expected_answer: str
-    expected_context_keywords: list[str]
-    category: str
-    difficulty: str
-    answer: str
-    sources: list[str]
-    latency_ms: float
-    model_name: str | None
-    error: str | None
-    answer_is_empty: bool
-    answer_too_short: bool
-    answer_too_long: bool
-    contains_error_message: bool
-    contains_unknown_answer: bool
-    response_length_chars: int
-    question_length_chars: int
-    expected_keyword_coverage: float
-    retrieval_count: int
-    retrieval_error: str | None
-    retrieval_score_max: float
-    retrieval_score_mean: float
-
-
 def load_dataset(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            clean_line = line.strip()
-            if clean_line:
-                records.append(json.loads(clean_line))
-    return records
+    return [example.to_dict() for example in EvaluationService().load_dataset(path)]
 
 
 def evaluate_dataset(
@@ -59,27 +25,29 @@ def evaluate_dataset(
     model_name: str | None = None,
     timeout_seconds: float = 180.0,
 ) -> list[EvaluationRecord]:
-    records = load_dataset(dataset_path)
-    results: list[EvaluationRecord] = []
+    service = EvaluationService()
+    examples = service.load_dataset(dataset_path)
+    records: list[EvaluationRecord] = []
     api_base_url = api_base_url.rstrip("/")
 
-    for index, record in enumerate(records, start=1):
-        request_id = f"eval-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{index}"
-        question = str(record["question"])
-        expected_answer = str(record.get("expected_answer", ""))
-        expected_keywords = [str(value) for value in record.get("expected_context_keywords", [])]
-        payload: dict[str, Any] = {"message": question, "enable_tts": False}
+    for example in examples:
+        request_id = f"eval-{example.id}"
+        payload: dict[str, Any] = {
+            "message": example.input,
+            "enable_tts": False,
+            "task_type": example.task_type,
+            "tags": example.tags,
+        }
         if model_name:
             payload["model_name"] = model_name
 
         started_at = perf_counter()
         answer = ""
-        sources: list[str] = []
-        source_scores: list[float] = []
-        response_retrieval_count: int | None = None
+        response_model = model_name or ""
         error: str | None = None
+        retrieval_count = 0
         retrieval_error: str | None = None
-        response_model = model_name
+        sources: list[dict[str, Any]] = []
         try:
             response = requests.post(
                 f"{api_base_url}/api/chat",
@@ -90,167 +58,91 @@ def evaluate_dataset(
             response.raise_for_status()
             data = response.json()
             answer = str(data.get("tutor_response", ""))
-            response_model = str(data.get("model_name") or response_model or "")
-            sources = parse_sources(data.get("sources"))
-            source_scores = parse_source_scores(data.get("sources"))
-            response_retrieval_count = parse_optional_int(data.get("retrieval_count"))
+            response_model = str(data.get("model_name") or response_model)
+            retrieval_count = int(data.get("retrieval_count", 0) or 0)
             raw_retrieval_error = data.get("retrieval_error")
             retrieval_error = raw_retrieval_error if isinstance(raw_retrieval_error, str) else None
+            raw_sources = data.get("sources")
+            if isinstance(raw_sources, list):
+                sources = [source for source in raw_sources if isinstance(source, dict)]
         except Exception as exc:  # pragma: no cover - depends on live API.
             error = str(exc)
 
-        latency_ms = round((perf_counter() - started_at) * 1000, 2)
-        lowered_answer = answer.lower()
-        retrieval_count = response_retrieval_count if response_retrieval_count is not None else len(sources)
-        results.append(
-            EvaluationRecord(
-                request_id=request_id,
-                timestamp=datetime.now(UTC).isoformat(),
-                question=question,
-                expected_answer=expected_answer,
-                expected_context_keywords=expected_keywords,
-                category=str(record.get("category", "general")),
-                difficulty=str(record.get("difficulty", "unknown")),
-                answer=answer,
-                sources=sources,
-                latency_ms=latency_ms,
-                model_name=response_model,
-                error=error,
-                answer_is_empty=not bool(answer.strip()),
-                answer_too_short=0 < len(answer.strip()) < 20,
-                answer_too_long=len(answer) > 3000,
-                contains_error_message=contains_error_message(lowered_answer),
-                contains_unknown_answer=contains_unknown_answer(lowered_answer),
-                response_length_chars=len(answer),
-                question_length_chars=len(question),
-                expected_keyword_coverage=keyword_coverage(answer, expected_keywords),
-                retrieval_count=retrieval_count,
-                retrieval_error=retrieval_error,
-                retrieval_score_max=max(source_scores) if source_scores else 0.0,
-                retrieval_score_mean=round(sum(source_scores) / len(source_scores), 4)
-                if source_scores
-                else 0.0,
+        tool_calls = []
+        if retrieval_count or retrieval_error is not None:
+            tool_calls.append(
+                ToolCallRecord(
+                    name="rag_retrieval",
+                    status="error" if retrieval_error else "success",
+                    error_message=retrieval_error,
+                    metadata={"result_count": retrieval_count, "sources": sources},
+                )
             )
+
+        reference_context = example.reference_context
+        expected_keywords = example.metadata.get("expected_context_keywords")
+        if reference_context is None and isinstance(expected_keywords, list):
+            reference_context = " ".join(str(keyword) for keyword in expected_keywords)
+
+        latency_ms = round((perf_counter() - started_at) * 1000, 2)
+        record = service.evaluate_interaction(
+            request_id=request_id,
+            session_id=None,
+            input_text=example.input,
+            output_text=answer,
+            expected_output=example.expected_output,
+            reference_context=reference_context,
+            model_name=response_model or model_name or "unknown",
+            provider="ollama",
+            task_type=example.task_type,
+            tags=example.tags,
+            latency_ms=latency_ms,
+            error_message=error,
+            tool_calls=tool_calls,
+            task_success=error is None,
+            metadata={
+                "dataset_id": example.id,
+                "dataset_path": str(dataset_path),
+                "expected_tool_calls": example.expected_tool_calls,
+                "sources": sources,
+            },
         )
+        records.append(record)
 
-    return results
-
-
-def contains_error_message(answer: str) -> bool:
-    patterns = ["error", "exception", "traceback", "could not", "unavailable"]
-    return any(pattern in answer for pattern in patterns)
-
-
-def contains_unknown_answer(answer: str) -> bool:
-    patterns = ["i don't know", "i do not know", "not sure", "cannot answer"]
-    return any(pattern in answer for pattern in patterns)
-
-
-def keyword_coverage(answer: str, expected_keywords: list[str]) -> float:
-    if not expected_keywords:
-        return 1.0
-    lowered_answer = answer.lower()
-    matched = sum(1 for keyword in expected_keywords if keyword.lower() in lowered_answer)
-    return round(matched / len(expected_keywords), 4)
-
-
-def parse_sources(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-
-    sources: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        source = item.get("source")
-        title = item.get("title")
-        if isinstance(source, str) and source:
-            sources.append(source)
-        elif isinstance(title, str) and title:
-            sources.append(title)
-    return sources
-
-
-def parse_source_scores(value: Any) -> list[float]:
-    if not isinstance(value, list):
-        return []
-
-    scores: list[float] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        score = item.get("score")
-        if score is None:
-            continue
-        try:
-            scores.append(float(score))
-        except (TypeError, ValueError):
-            continue
-    return scores
-
-
-def parse_optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return records
 
 
 def save_results(results: list[EvaluationRecord], output_dir: Path) -> tuple[Path, Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    jsonl_path = output_dir / f"eval_results_{timestamp}.jsonl"
-    csv_path = output_dir / f"eval_results_{timestamp}.csv"
+    service = EvaluationService()
+    dataset_path = Path(results[0].metadata.get("dataset_path", "unknown")) if results else Path("unknown")
+    model_name = results[0].model_name if results else None
+    records_path, _summary_path = service.save_run_results(
+        dataset_path=dataset_path,
+        records=results,
+        output_dir=output_dir,
+        model_name=model_name,
+    )
 
-    with jsonl_path.open("w", encoding="utf-8") as handle:
-        for result in results:
-            handle.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
-
+    csv_path = records_path.with_suffix(".csv")
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(asdict(results[0]).keys()) if results else [])
         if results:
+            fieldnames = list(results[0].to_dict().keys())
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(asdict(result) for result in results)
+            writer.writerows(record.to_dict() for record in results)
+        else:
+            writer = csv.writer(handle)
+            writer.writerow(["empty"])
 
-    return jsonl_path, csv_path
+    return records_path, csv_path
 
 
 def send_scores_to_langfuse(results: list[EvaluationRecord]) -> None:
     tracer = get_langfuse_tracer()
     for result in results:
-        tracer.score(
-            trace_id=result.request_id,
-            name="keyword_coverage_score",
-            value=result.expected_keyword_coverage,
-        )
-        tracer.score(
-            trace_id=result.request_id,
-            name="latency_ms",
-            value=result.latency_ms,
-        )
-        tracer.score(
-            trace_id=result.request_id,
-            name="answer_empty_flag",
-            value=1 if result.answer_is_empty else 0,
-        )
-        tracer.score(
-            trace_id=result.request_id,
-            name="retrieval_count",
-            value=result.retrieval_count,
-            comment="Number of RAG chunks returned by the API for this evaluation request.",
-        )
-        tracer.score(
-            trace_id=result.request_id,
-            name="retrieval_score_max",
-            value=result.retrieval_score_max,
-        )
-        tracer.score(
-            trace_id=result.request_id,
-            name="retrieval_error_flag",
-            value=1 if result.retrieval_error else 0,
-        )
+        for name, value in result.metrics.to_dict().items():
+            if value is not None:
+                tracer.score(trace_id=result.request_id, name=name, value=value)
     tracer.flush()
 
 
@@ -258,26 +150,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run English Voice Tutor LLM evaluation.")
     parser.add_argument(
         "--dataset",
-        default="data/evaluation/datasets/sample_questions.jsonl",
+        default="evals/english_practice_eval.jsonl",
         help="JSONL evaluation dataset path.",
     )
     parser.add_argument(
         "--api-base-url",
         default="http://localhost/english",
-        help="Base URL for the web/API route, for example http://localhost/english.",
+        help="Base URL for the FastAPI service.",
     )
-    parser.add_argument("--model-name", default=None)
+    parser.add_argument("--model", default=None, help="Optional model name override.")
+    parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--output-dir", default="data/evaluation/results")
     args = parser.parse_args()
 
     results = evaluate_dataset(
         dataset_path=Path(args.dataset),
         api_base_url=args.api_base_url,
-        model_name=args.model_name,
+        model_name=args.model,
+        timeout_seconds=args.timeout_seconds,
     )
-    jsonl_path, csv_path = save_results(results, Path(args.output_dir))
+    records_path, csv_path = save_results(results, Path(args.output_dir))
     send_scores_to_langfuse(results)
-    print(f"Saved JSONL results: {jsonl_path}")
+    print(f"Saved JSONL results: {records_path}")
     print(f"Saved CSV results: {csv_path}")
 
 

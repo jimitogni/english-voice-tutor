@@ -55,6 +55,41 @@ export interface StatusResponse {
   rag: RagStatus;
 }
 
+export interface ObservabilityRunSummary {
+  run_id: string;
+  created_at: string;
+  dataset_path: string;
+  dataset_size: number;
+  model_name: string | null;
+  git_commit: string | null;
+  records_path: string;
+  summary_path: string;
+  averages: Record<string, number>;
+  counts: Record<string, number>;
+}
+
+export interface ObservabilitySummaryResponse {
+  status: string;
+  service: string;
+  environment: string;
+  langfuse_enabled: boolean;
+  langfuse_url: string | null;
+  evaluation_enabled: boolean;
+  metrics_enabled: boolean;
+  prometheus_enabled: boolean;
+  rag_enabled: boolean;
+  total_interactions: number;
+  interactions_last_24h: number;
+  total_errors: number;
+  average_latency_ms: number;
+  average_feedback_score: number | null;
+  tool_call_count: number;
+  tool_call_error_count: number;
+  task_success_rate: number | null;
+  last_interaction_at: string | null;
+  latest_run: ObservabilityRunSummary | null;
+}
+
 export interface RagSourceInfo {
   title: string;
   source: string;
@@ -63,6 +98,7 @@ export interface RagSourceInfo {
 }
 
 export interface ChatResponse {
+  request_id: string;
   session_id: string;
   mode: string;
   model_name: string;

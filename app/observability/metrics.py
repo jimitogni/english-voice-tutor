@@ -155,6 +155,36 @@ RAG_RETRIEVAL_RESULTS = Histogram(
     buckets=(0, 1, 2, 3, 4, 6, 8, 10),
     registry=REGISTRY,
 )
+EVALUATION_INTERACTIONS_TOTAL = Counter(
+    "evaluation_interactions_total",
+    "Total evaluation records written for live or offline interactions.",
+    ["task_type", "status"],
+    registry=REGISTRY,
+)
+EVALUATION_TASK_SUCCESS_TOTAL = Counter(
+    "evaluation_task_success_total",
+    "Total successful evaluated tasks.",
+    ["task_type"],
+    registry=REGISTRY,
+)
+EVALUATION_TOOL_CALLS_TOTAL = Counter(
+    "evaluation_tool_calls_total",
+    "Total evaluated tool calls.",
+    ["tool_name", "status"],
+    registry=REGISTRY,
+)
+EVALUATION_TOOL_CALL_LATENCY_SECONDS = Histogram(
+    "evaluation_tool_call_latency_seconds",
+    "Latency of evaluated tool calls in seconds.",
+    ["tool_name"],
+    registry=REGISTRY,
+)
+EVALUATION_USER_FEEDBACK_TOTAL = Counter(
+    "evaluation_user_feedback_total",
+    "Count of user feedback events grouped by rounded score.",
+    ["score_bucket"],
+    registry=REGISTRY,
+)
 
 
 def observe_fastapi_request(
@@ -225,6 +255,28 @@ def observe_rag_retrieval(
     RAG_RETRIEVALS_TOTAL.labels(vector_db, status).inc()
     RAG_RETRIEVAL_LATENCY_SECONDS.labels(vector_db).observe(latency_seconds)
     RAG_RETRIEVAL_RESULTS.labels(vector_db).observe(max(result_count, 0))
+
+
+def observe_evaluation_interaction(*, task_type: str, status: str, success: bool | None) -> None:
+    EVALUATION_INTERACTIONS_TOTAL.labels(task_type, status).inc()
+    if success:
+        EVALUATION_TASK_SUCCESS_TOTAL.labels(task_type).inc()
+
+
+def observe_evaluation_tool_call(
+    *,
+    tool_name: str,
+    status: str,
+    latency_seconds: float | None = None,
+) -> None:
+    EVALUATION_TOOL_CALLS_TOTAL.labels(tool_name, status).inc()
+    if latency_seconds is not None:
+        EVALUATION_TOOL_CALL_LATENCY_SECONDS.labels(tool_name).observe(max(latency_seconds, 0.0))
+
+
+def observe_user_feedback(score: float) -> None:
+    rounded = str(int(round(score)))
+    EVALUATION_USER_FEEDBACK_TOTAL.labels(rounded).inc()
 
 
 def metrics_response(enabled: bool) -> Response:

@@ -7,7 +7,7 @@ This project now has app-side hooks for:
 - Evidently-compatible offline evaluation reports saved under `data/reports/evidently`, including retrieval counts and scores when RAG is enabled.
 - Structured JSON logs with request IDs, session IDs, latency, model name, and status.
 
-The homelab already has Grafana and Prometheus running in the `customer-churn-propensity-mlops` stack. Langfuse was not detected, so the client is disabled by default until a private Langfuse instance and project API keys are configured.
+The homelab already has Grafana and Prometheus running in the `customer-churn-propensity-mlops` stack. Langfuse can now be enabled either by pointing the API at an existing private Langfuse deployment or by starting the bundled `docker-compose.langfuse.yml` overlay.
 
 ## Health Checks
 

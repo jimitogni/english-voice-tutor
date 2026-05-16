@@ -1,4 +1,9 @@
-import type { ChatResponse, FocusWordsResponse, StatusResponse } from "./types";
+import type {
+  ChatResponse,
+  FocusWordsResponse,
+  ObservabilitySummaryResponse,
+  StatusResponse,
+} from "./types";
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
@@ -42,6 +47,10 @@ export function absoluteAudioUrl(audioUrl: string): string {
 
 export function fetchStatus(): Promise<StatusResponse> {
   return requestJson<StatusResponse>("/api/status");
+}
+
+export function fetchObservabilitySummary(): Promise<ObservabilitySummaryResponse> {
+  return requestJson<ObservabilitySummaryResponse>("/api/observability/summary");
 }
 
 export interface SendChatInput {

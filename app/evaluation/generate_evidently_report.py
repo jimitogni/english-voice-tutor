@@ -54,16 +54,17 @@ def _try_generate_evidently_report(records: list[dict[str, Any]], path: Path) ->
 
 def _manual_quality_report(records: list[dict[str, Any]]) -> str:
     total = len(records)
-    empty = sum(1 for record in records if record.get("answer_is_empty"))
-    error = sum(1 for record in records if record.get("error"))
-    coverage = _safe_mean(record.get("expected_keyword_coverage", 0.0) for record in records)
+    empty = sum(1 for record in records if not str(record.get("output_text", "")).strip())
+    error = sum(1 for record in records if record.get("error_message"))
+    semantic = _safe_mean(record.get("semantic_similarity", 0.0) for record in records)
+    bleu = _safe_mean(record.get("bleu_score", 0.0) for record in records)
     rows = "".join(
         "<tr>"
-        f"<td>{html.escape(str(record.get('category', '')))}</td>"
-        f"<td>{html.escape(str(record.get('question', '')))}</td>"
-        f"<td>{html.escape(str(record.get('answer', ''))[:400])}</td>"
-        f"<td>{record.get('expected_keyword_coverage', 0)}</td>"
-        f"<td>{html.escape(str(record.get('error') or ''))}</td>"
+        f"<td>{html.escape(str(record.get('task_type', '')))}</td>"
+        f"<td>{html.escape(str(record.get('input_text', '')))}</td>"
+        f"<td>{html.escape(str(record.get('output_text', ''))[:400])}</td>"
+        f"<td>{record.get('semantic_similarity', 0)}</td>"
+        f"<td>{html.escape(str(record.get('error_message') or ''))}</td>"
         "</tr>"
         for record in records
     )
@@ -73,9 +74,10 @@ def _manual_quality_report(records: list[dict[str, Any]]) -> str:
         <p>Total records: {total}</p>
         <p>Empty answers: {empty}</p>
         <p>Errors: {error}</p>
-        <p>Mean expected keyword coverage: {coverage:.2f}</p>
+        <p>Mean semantic similarity: {semantic:.2f}</p>
+        <p>Mean BLEU score: {bleu:.2f}</p>
         <table>
-          <thead><tr><th>Category</th><th>Question</th><th>Answer</th><th>Keyword Coverage</th><th>Error</th></tr></thead>
+          <thead><tr><th>Task</th><th>Input</th><th>Output</th><th>Semantic Similarity</th><th>Error</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
         """,
@@ -84,17 +86,17 @@ def _manual_quality_report(records: list[dict[str, Any]]) -> str:
 
 def _manual_rag_report(records: list[dict[str, Any]]) -> str:
     total = len(records)
-    retrieval_counts = [int(record.get("retrieval_count", 0) or 0) for record in records]
-    errors = sum(1 for record in records if record.get("retrieval_error"))
-    score_max = _safe_mean(record.get("retrieval_score_max", 0.0) for record in records)
+    retrieval_counts = [_tool_result_count(record) for record in records]
+    errors = sum(1 for record in records if _tool_error(record))
+    success_rate = _safe_mean(record.get("tool_call_success_rate", 0.0) for record in records)
     rows = "".join(
         "<tr>"
-        f"<td>{html.escape(str(record.get('category', '')))}</td>"
-        f"<td>{html.escape(str(record.get('question', '')))}</td>"
-        f"<td>{record.get('retrieval_count', 0)}</td>"
-        f"<td>{record.get('retrieval_score_max', 0)}</td>"
-        f"<td>{html.escape(', '.join(str(source) for source in record.get('sources', []))[:300])}</td>"
-        f"<td>{html.escape(str(record.get('retrieval_error') or ''))}</td>"
+        f"<td>{html.escape(str(record.get('task_type', '')))}</td>"
+        f"<td>{html.escape(str(record.get('input_text', '')))}</td>"
+        f"<td>{_tool_result_count(record)}</td>"
+        f"<td>{record.get('tool_call_success_rate', 0)}</td>"
+        f"<td>{html.escape(str(record.get('reference_context') or ''))[:300]}</td>"
+        f"<td>{html.escape(str(_tool_error(record) or ''))}</td>"
         "</tr>"
         for record in records
     )
@@ -103,10 +105,10 @@ def _manual_rag_report(records: list[dict[str, Any]]) -> str:
         f"""
         <p>Total records: {total}</p>
         <p>Mean retrieved chunks: {_safe_mean(retrieval_counts):.2f}</p>
-        <p>Mean max retrieval score: {score_max:.2f}</p>
+        <p>Mean retrieval tool success rate: {success_rate:.2f}</p>
         <p>Retrieval errors: {errors}</p>
         <table>
-          <thead><tr><th>Category</th><th>Question</th><th>Chunks</th><th>Max Score</th><th>Sources</th><th>Error</th></tr></thead>
+          <thead><tr><th>Task</th><th>Input</th><th>Chunks</th><th>Tool Success Rate</th><th>Reference Context</th><th>Error</th></tr></thead>
           <tbody>{rows}</tbody>
         </table>
         """,
@@ -158,8 +160,34 @@ def _page(title: str, body: str) -> str:
 
 
 def _safe_mean(values) -> float:
-    clean_values = [float(value) for value in values]
+    clean_values = [float(value) for value in values if value is not None]
     return mean(clean_values) if clean_values else 0.0
+
+
+def _tool_result_count(record: dict[str, Any]) -> int:
+    tool_calls = record.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return 0
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict) and tool_call.get("name") == "rag_retrieval":
+            metadata = tool_call.get("metadata")
+            if isinstance(metadata, dict):
+                try:
+                    return int(metadata.get("result_count", 0) or 0)
+                except (TypeError, ValueError):
+                    return 0
+    return 0
+
+
+def _tool_error(record: dict[str, Any]) -> str | None:
+    tool_calls = record.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return None
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict) and tool_call.get("name") == "rag_retrieval":
+            error_message = tool_call.get("error_message")
+            return str(error_message) if error_message else None
+    return None
 
 
 def main() -> None:

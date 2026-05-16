@@ -26,6 +26,10 @@ if [[ "${ENABLE_GPU:-0}" == "1" || "${ENABLE_OLLAMA_GPU:-0}" == "1" ]]; then
   compose_args+=(-f docker-compose.gpu.yml)
   echo "GPU override enabled for Ollama and API services."
 fi
+if [[ "${ENABLE_LANGFUSE_STACK:-0}" == "1" ]]; then
+  compose_args+=(-f docker-compose.langfuse.yml)
+  echo "Langfuse overlay enabled."
+fi
 
 echo "Building and starting the homelab stack..."
 docker compose "${compose_args[@]}" up -d --build
@@ -61,3 +65,6 @@ echo
 echo "Homelab deployment is ready:"
 echo "  Web: http://localhost:${WEB_PORT:-8080}"
 echo "  API: http://localhost:${API_PORT:-8000}/docs"
+if [[ "${ENABLE_LANGFUSE_STACK:-0}" == "1" ]]; then
+  echo "  Langfuse: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}"
+fi

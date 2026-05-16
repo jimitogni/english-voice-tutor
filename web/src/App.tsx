@@ -1,9 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
-import { addFocusWord, fetchStatus, removeFocusWord, resetSession, sendChat, sendVoice } from "./api";
+import {
+  addFocusWord,
+  fetchObservabilitySummary,
+  fetchStatus,
+  removeFocusWord,
+  resetSession,
+  sendChat,
+  sendVoice,
+} from "./api";
 import { ChatWindow } from "./components/ChatWindow";
+import { ObservabilityPage } from "./components/ObservabilityPage";
 import { Sidebar } from "./components/Sidebar";
 import { VoiceDock } from "./components/VoiceDock";
-import type { ChatMessage, ChatResponse, StatusResponse, VadSettings, VoiceInfo } from "./types";
+import type {
+  ChatMessage,
+  ChatResponse,
+  ObservabilitySummaryResponse,
+  StatusResponse,
+  VadSettings,
+  VoiceInfo,
+} from "./types";
 import "./styles.css";
 
 function uniqueValues(values: string[]): string[] {
@@ -19,6 +35,10 @@ function uniqueValues(values: string[]): string[] {
 
 function messageId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function observabilityRouteActive(): boolean {
+  return /\/observability\/?$/.test(window.location.pathname);
 }
 
 function assistantMessage(response: ChatResponse): ChatMessage {
@@ -46,30 +66,48 @@ function userMessage(content: string, pronunciationFeedback?: string | null): Ch
 }
 
 export default function App() {
+  const showObservabilityPage = observabilityRouteActive();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [selectedMode, setSelectedMode] = useState("free");
   const [selectedModel, setSelectedModel] = useState("");
   const [enableTts, setEnableTts] = useState(true);
   const [vadSettings, setVadSettings] = useState<VadSettings | null>(null);
+  const [observabilitySummary, setObservabilitySummary] = useState<ObservabilitySummaryResponse | null>(null);
+  const [observabilityLoading, setObservabilityLoading] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function refreshObservabilitySummary() {
+    try {
+      const summary = await fetchObservabilitySummary();
+      setObservabilitySummary(summary);
+    } catch {
+      // Keep the existing dashboard state if the summary endpoint is temporarily unavailable.
+    } finally {
+      setObservabilityLoading(false);
+    }
+  }
+
   useEffect(() => {
-    fetchStatus()
-      .then((payload) => {
-        setStatus(payload);
-        setSelectedMode(payload.default_mode);
-        setSelectedModel(payload.default_model);
-        setEnableTts(payload.tts_enabled);
-        setVadSettings(payload.vad);
-        if (payload.ollama_error) {
-          setError(payload.ollama_error);
+    Promise.all([fetchStatus(), fetchObservabilitySummary()])
+      .then(([statusPayload, summaryPayload]) => {
+        setStatus(statusPayload);
+        setObservabilitySummary(summaryPayload);
+        setSelectedMode(statusPayload.default_mode);
+        setSelectedModel(statusPayload.default_model);
+        setEnableTts(statusPayload.tts_enabled);
+        setVadSettings(statusPayload.vad);
+        if (statusPayload.ollama_error) {
+          setError(statusPayload.ollama_error);
         }
       })
       .catch((loadError: unknown) => {
         setError(loadError instanceof Error ? loadError.message : "Could not load API status.");
+      })
+      .finally(() => {
+        setObservabilityLoading(false);
       });
   }, []);
 
@@ -104,6 +142,7 @@ export default function App() {
       await resetSession(sessionId);
       setSessionId(null);
       setMessages([]);
+      await refreshObservabilitySummary();
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : "Could not reset the session.");
     } finally {
@@ -118,6 +157,7 @@ export default function App() {
       const response = await exchange();
       setSessionId(response.session_id);
       setMessages((current) => [...current, assistantMessage(response)]);
+      await refreshObservabilitySummary();
     } catch (exchangeError) {
       setError(exchangeError instanceof Error ? exchangeError.message : "The tutor request failed.");
     } finally {
@@ -167,6 +207,16 @@ export default function App() {
     );
   }
 
+  if (showObservabilityPage) {
+    return (
+      <ObservabilityPage
+        loading={observabilityLoading}
+        onRefresh={refreshObservabilitySummary}
+        summary={observabilitySummary}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -179,6 +229,8 @@ export default function App() {
         installedModels={status.installed_models}
         modes={status.modes}
         models={modelOptions}
+        observabilityLoading={observabilityLoading}
+        observabilitySummary={observabilitySummary}
         onAddFocusWord={handleAddFocusWord}
         onEnableTtsChange={setEnableTts}
         onModeChange={setSelectedMode}

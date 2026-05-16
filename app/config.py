@@ -65,10 +65,17 @@ class AppConfig:
     focus_words_path: Path
     langfuse_enabled: bool
     langfuse_host: str
+    langfuse_public_url: str
     langfuse_public_key: str
     langfuse_secret_key: str
     evidently_enabled: bool
     evidently_reports_dir: Path
+    evaluation_enabled: bool
+    evaluation_data_dir: Path
+    evaluation_embedding_backend: str
+    evaluation_embedding_model: str
+    evaluation_cost_input_per_million: float
+    evaluation_cost_output_per_million: float
     metrics_enabled: bool
     prometheus_enabled: bool
     grafana_enabled: bool
@@ -218,12 +225,37 @@ def load_config() -> AppConfig:
         focus_words_path=project_root / "data" / "vocabulary" / "focus_words.json",
         langfuse_enabled=_get_bool("LANGFUSE_ENABLED", False),
         langfuse_host=_get_non_empty("LANGFUSE_HOST", "http://localhost:3000").rstrip("/"),
+        langfuse_public_url=_get_non_empty(
+            "LANGFUSE_PUBLIC_URL",
+            os.getenv("LANGFUSE_HOST", "http://localhost:3000"),
+        ).rstrip("/"),
         langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY", "").strip(),
         langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY", "").strip(),
         evidently_enabled=_get_bool("EVIDENTLY_ENABLED", True),
         evidently_reports_dir=resolve_project_path(
             project_root,
             os.getenv("EVIDENTLY_REPORTS_DIR", "./data/reports/evidently"),
+        ),
+        evaluation_enabled=_get_bool("EVALUATION_ENABLED", True),
+        evaluation_data_dir=resolve_project_path(
+            project_root,
+            os.getenv("EVALUATION_DATA_DIR", "./data/evaluation"),
+        ),
+        evaluation_embedding_backend=_get_non_empty(
+            "EVALUATION_EMBEDDING_BACKEND",
+            "ollama",
+        ),
+        evaluation_embedding_model=_get_non_empty(
+            "EVALUATION_EMBEDDING_MODEL",
+            os.getenv("RAG_EMBEDDING_MODEL", "embeddinggemma"),
+        ),
+        evaluation_cost_input_per_million=_get_non_negative_float(
+            "EVALUATION_COST_INPUT_PER_MILLION",
+            0.0,
+        ),
+        evaluation_cost_output_per_million=_get_non_negative_float(
+            "EVALUATION_COST_OUTPUT_PER_MILLION",
+            0.0,
         ),
         metrics_enabled=_get_bool("METRICS_ENABLED", True),
         prometheus_enabled=_get_bool("PROMETHEUS_ENABLED", True),

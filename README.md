@@ -829,18 +829,61 @@ English Voice Tutor includes optional observability for the homelab deployment:
 - Prometheus metrics at `/english/api/metrics`.
 - Grafana dashboard JSON at `docs/observability/grafana_llm_dashboard.json`.
 - Evidently-compatible quality, retrieval, and latency reports under `data/reports/evidently`.
+- Per-interaction evaluation records under `data/evaluation/interactions/`.
+- Dataset-based evaluation runs and run summaries under `data/evaluation/results/`.
+- Observability summary API at `/api/observability/summary`.
 - Structured JSON logs when `LOG_JSON=true`.
 
-Langfuse was not installed on the server when this was added, so `LANGFUSE_ENABLED=false`
-is the safe default. After deploying a private Langfuse instance, set real keys only in
+The React sidebar now includes a lightweight observability dashboard card that shows recent interaction counts, errors, latency, feedback, tool-call stats, and the latest offline eval run summary.
+
+The evaluation layer now records or computes:
+
+- BLEU, ROUGE-1, and ROUGE-L when a reference answer exists
+- semantic similarity through a local embedding backend
+- response length, latency, token usage, and estimated cost
+- error rate, factuality or hallucination score when reference context exists, and grammar correction quality when a reference correction exists
+- task success, tool call success or error rates, and tool calls per interaction
+- optional user feedback scores through `POST /api/feedback`
+
+The default semantic backend uses the local Ollama embedding model already configured for RAG. You can switch to `sentence-transformers` later by installing it and changing `.env`:
+
+```env
+EVALUATION_ENABLED=true
+EVALUATION_DATA_DIR=./data/evaluation
+EVALUATION_EMBEDDING_BACKEND=ollama
+EVALUATION_EMBEDDING_MODEL=embeddinggemma
+EVALUATION_COST_INPUT_PER_MILLION=0
+EVALUATION_COST_OUTPUT_PER_MILLION=0
+```
+
+Example evaluation dataset:
+
+```text
+evals/english_practice_eval.jsonl
+```
+
+Langfuse is optional, but this repo now includes a bundled self-hosted overlay in
+`docker-compose.langfuse.yml`. To enable it in the homelab stack, set these in
 `.env.homelab`:
 
 ```env
+ENABLE_LANGFUSE_STACK=1
 LANGFUSE_ENABLED=true
-LANGFUSE_HOST=http://<private-langfuse-host>:3000
+LANGFUSE_HOST=http://langfuse-web:3000
+LANGFUSE_PUBLIC_URL=http://localhost:3000
 LANGFUSE_PUBLIC_KEY=<project-public-key>
 LANGFUSE_SECRET_KEY=<project-secret-key>
 ```
+
+The overlay supports headless bootstrap via `LANGFUSE_INIT_*`, so the first org,
+project, user, and API keys can be provisioned during startup. If you already run a
+private Langfuse elsewhere, keep `ENABLE_LANGFUSE_STACK=0` and point
+`LANGFUSE_HOST` / `LANGFUSE_PUBLIC_URL` at that deployment instead.
+
+For internet access behind this repo's Traefik setup, prefer a dedicated hostname
+such as `http://langfuse-jimitogni.duckdns.org:8888`. A `/langfuse` path-prefix
+deployment is possible, but Langfuse's current self-hosted docs require rebuilding
+the web image with a custom base path for that mode.
 
 The existing homelab Prometheus can scrape the app through the web container:
 

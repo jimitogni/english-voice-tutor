@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from time import perf_counter
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any
 
 import requests
@@ -20,6 +21,19 @@ from app.observability.metrics import (
 from app.observability.privacy import sanitize_messages
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LlmCallMetadata:
+    model: str
+    provider: str
+    status: str
+    latency_ms: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    token_source: str | None = None
+    error_message: str | None = None
+    raw_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class OllamaError(RuntimeError):
@@ -41,6 +55,7 @@ class OllamaClient:
         self.model = self.config.ollama_model
         self.timeout_seconds = timeout_seconds
         self.session = requests.Session()
+        self.last_call_metadata: LlmCallMetadata | None = None
 
     def list_models(self) -> list[str]:
         url = f"{self.base_url}/api/tags"
@@ -241,6 +256,16 @@ class OllamaClient:
             )
 
         ollama_metadata = _ollama_metadata(data)
+        self.last_call_metadata = LlmCallMetadata(
+            model=model,
+            provider="ollama",
+            status="success",
+            latency_ms=round(latency_seconds * 1000, 2),
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            token_source=token_source,
+            raw_metadata=ollama_metadata,
+        )
         langfuse_metadata = {
             **ollama_metadata,
             "provider": "ollama",
@@ -273,6 +298,13 @@ class OllamaClient:
 
     def _record_llm_error(self, model: str, started_at: float, error_message: str) -> None:
         latency_seconds = perf_counter() - started_at
+        self.last_call_metadata = LlmCallMetadata(
+            model=model,
+            provider="ollama",
+            status="error",
+            latency_ms=round(latency_seconds * 1000, 2),
+            error_message=error_message,
+        )
         if self.config.metrics_enabled and self.config.prometheus_enabled:
             observe_llm_call(
                 model=model,

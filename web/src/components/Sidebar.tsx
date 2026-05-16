@@ -10,7 +10,8 @@ import {
   Volume2,
 } from "lucide-react";
 import { FormEvent, useState } from "react";
-import type { ModeInfo, VadSettings, VoiceInfo } from "../types";
+import type { ModeInfo, ObservabilitySummaryResponse, VadSettings, VoiceInfo } from "../types";
+import { ObservabilityPanel } from "./ObservabilityPanel";
 
 type VadSettingKey = "max_seconds" | "silence_seconds" | "energy_threshold" | "chunk_ms" | "min_speech_seconds";
 
@@ -83,6 +84,8 @@ interface SidebarProps {
   selectedModel: string;
   onModelChange: (model: string) => void;
   selectedVoice: VoiceInfo | null;
+  observabilitySummary: ObservabilitySummaryResponse | null;
+  observabilityLoading: boolean;
   enableTts: boolean;
   onEnableTtsChange: (enabled: boolean) => void;
   focusWords: string[];
@@ -137,6 +140,8 @@ export function Sidebar({
   selectedModel,
   onModelChange,
   selectedVoice,
+  observabilitySummary,
+  observabilityLoading,
   enableTts,
   onEnableTtsChange,
   focusWords,
@@ -243,6 +248,8 @@ export function Sidebar({
           <span>Autoplay speech</span>
         </label>
       </section>
+
+      <ObservabilityPanel loading={observabilityLoading} summary={observabilitySummary} />
 
       <section className="panel-section vad-section">
         <button

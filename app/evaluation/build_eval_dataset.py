@@ -6,25 +6,29 @@ from pathlib import Path
 
 SAMPLE_QUESTIONS = [
     {
-        "question": "Explain the difference between although and even though with one example.",
-        "expected_answer": "Both introduce contrast. Even though often sounds stronger or more conversational.",
-        "expected_context_keywords": ["contrast", "although", "even though"],
-        "category": "grammar",
-        "difficulty": "easy",
+        "id": "grammar_001",
+        "input": "I have a difficult question about programming with AI.",
+        "expected_output": "I have a difficult question about programming with AI.",
+        "task_type": "grammar_correction",
+        "tags": ["english", "grammar"],
+        "metadata": {"difficulty": "easy"},
     },
     {
-        "question": "Correct this sentence: I am agree with you.",
-        "expected_answer": "I agree with you.",
-        "expected_context_keywords": ["I agree with you"],
-        "category": "correction",
-        "difficulty": "easy",
+        "id": "grammar_002",
+        "input": "Correct this sentence: I am agree with you.",
+        "expected_output": "I agree with you.",
+        "task_type": "grammar_correction",
+        "tags": ["english", "grammar"],
+        "metadata": {"difficulty": "easy"},
     },
     {
-        "question": "Give me a short interview answer about my experience with MLOps.",
-        "expected_answer": "A concise first-person answer mentioning production ML, monitoring, and deployment.",
-        "expected_context_keywords": ["MLOps", "monitoring", "deployment"],
-        "category": "interview",
-        "difficulty": "medium",
+        "id": "conversation_001",
+        "input": "Give me a short interview answer about my experience with MLOps.",
+        "expected_output": "I have worked on production ML systems, including deployment, monitoring, and continuous improvement.",
+        "task_type": "conversation",
+        "tags": ["english", "interview"],
+        "reference_context": "The answer should mention production ML systems, deployment, monitoring, and improvement.",
+        "metadata": {"difficulty": "medium"},
     },
 ]
 
@@ -38,8 +42,12 @@ def write_sample_dataset(path: Path) -> Path:
 
 
 def main() -> None:
-    path = write_sample_dataset(Path("data/evaluation/datasets/sample_questions.jsonl"))
-    print(f"Wrote sample dataset: {path}")
+    paths = [
+        write_sample_dataset(Path("evals/english_practice_eval.jsonl")),
+        write_sample_dataset(Path("data/evaluation/datasets/sample_questions.jsonl")),
+    ]
+    for path in paths:
+        print(f"Wrote sample dataset: {path}")
 
 
 if __name__ == "__main__":

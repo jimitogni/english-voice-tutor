@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import hashlib
 import logging
 import mimetypes
 from time import perf_counter
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import cast
@@ -17,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import AppConfig, ConfigError, load_config
+from app.evaluation.service import EvaluationService
+from app.evaluation.models import ToolCallRecord
 from app.focus_words import FocusWordsError, FocusWordsStore
 from app.llm_client import OllamaClient, OllamaError
 from app.memory import ConversationMemory, ConversationMemoryError
@@ -26,9 +30,12 @@ from app.observability.langfuse_client import get_langfuse_tracer, langfuse_cred
 from app.observability.logging import configure_logging, log_event
 from app.observability.metrics import (
     metrics_response,
+    observe_evaluation_interaction,
+    observe_evaluation_tool_call,
     observe_fastapi_request,
     observe_stt_call,
     observe_tts_call,
+    observe_user_feedback,
 )
 from app.observability.privacy import hash_identifier, maybe_response
 from app.prompts import TutorMode, available_modes, get_mode_definition
@@ -115,6 +122,7 @@ class ApiHealthResponse(BaseModel):
     environment: str
     langfuse_enabled: bool
     evidently_enabled: bool
+    evaluation_enabled: bool
     metrics_enabled: bool
     prometheus_enabled: bool
     grafana_enabled: bool
@@ -128,12 +136,52 @@ class ObservabilityHealthResponse(ApiHealthResponse):
     piper_cuda: bool
 
 
+class ObservabilityRunSummary(BaseModel):
+    run_id: str
+    created_at: str
+    dataset_path: str
+    dataset_size: int
+    model_name: str | None = None
+    git_commit: str | None = None
+    records_path: str
+    summary_path: str
+    averages: dict[str, float]
+    counts: dict[str, int]
+
+
+class ObservabilitySummaryResponse(BaseModel):
+    status: str
+    service: str
+    environment: str
+    langfuse_enabled: bool
+    langfuse_url: str | None = None
+    evaluation_enabled: bool
+    metrics_enabled: bool
+    prometheus_enabled: bool
+    rag_enabled: bool
+    total_interactions: int
+    interactions_last_24h: int
+    total_errors: int
+    average_latency_ms: float
+    average_feedback_score: float | None = None
+    tool_call_count: int
+    tool_call_error_count: int
+    task_success_rate: float | None = None
+    last_interaction_at: str | None = None
+    latest_run: ObservabilityRunSummary | None = None
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     session_id: str | None = None
     mode: str = "free"
     model_name: str | None = None
     enable_tts: bool = True
+    expected_output: str | None = None
+    reference_context: str | None = None
+    task_type: str = "general"
+    tags: list[str] = Field(default_factory=list)
+    task_success: bool | None = None
 
 
 class RagSourceInfo(BaseModel):
@@ -144,6 +192,7 @@ class RagSourceInfo(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    request_id: str
     session_id: str
     mode: str
     model_name: str
@@ -174,6 +223,17 @@ class ResetRequest(BaseModel):
 class ResetResponse(BaseModel):
     session_id: str
     reset: bool
+
+
+class FeedbackRequest(BaseModel):
+    request_id: str = Field(min_length=1)
+    score: float = Field(ge=0.0, le=5.0)
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class FeedbackResponse(BaseModel):
+    request_id: str
+    saved: bool
 
 
 @dataclass
@@ -425,6 +485,11 @@ def _chat_response(
     stt_model_name: str,
     enable_tts: bool,
     pronunciation_feedback: str | None = None,
+    expected_output: str | None = None,
+    reference_context: str | None = None,
+    task_type: str = "general",
+    tags: list[str] | None = None,
+    task_success: bool | None = None,
 ) -> ChatResponse:
     agent, state = _agent_for_request(config=config, session_id=session_id, mode=mode)
     request_id = current_request_id() or uuid4().hex
@@ -460,6 +525,39 @@ def _chat_response(
         try:
             tutor_response = agent.reply(user_text, stt_model_name=stt_model_name)
         except OllamaError as exc:
+            latency_ms = round((perf_counter() - started_at) * 1000, 2)
+            llm_metadata = agent.llm_client.last_call_metadata
+            evaluation_service = EvaluationService(config)
+            error_record = evaluation_service.evaluate_interaction(
+                request_id=request_id,
+                session_id=session_id,
+                input_text=user_text,
+                output_text="",
+                expected_output=expected_output,
+                reference_context=reference_context,
+                model_name=config.ollama_model,
+                provider=llm_metadata.provider if llm_metadata is not None else "ollama",
+                task_type=task_type,
+                tags=tags,
+                latency_ms=latency_ms,
+                input_tokens=llm_metadata.input_tokens if llm_metadata is not None else None,
+                output_tokens=llm_metadata.output_tokens if llm_metadata is not None else None,
+                token_source=llm_metadata.token_source if llm_metadata is not None else None,
+                error_message=str(exc),
+                task_success=False if task_success is None else task_success,
+                metadata={
+                    "mode": mode,
+                    "stt_model_name": stt_model_name,
+                    "request_source": "api",
+                },
+            )
+            evaluation_service.persist_interaction(error_record)
+            if config.metrics_enabled and config.prometheus_enabled:
+                observe_evaluation_interaction(
+                    task_type=task_type,
+                    status=error_record.workflow_status,
+                    success=error_record.metrics.task_success_rate == 1.0,
+                )
             tracer.update_trace(
                 trace,
                 metadata={"status": "error", "error_message": str(exc)},
@@ -471,6 +569,22 @@ def _chat_response(
         voice = voice_profile_for_model(config, config.ollama_model)
         audio_url, tts_error = _synthesize_response(config, tutor_response, enable_tts)
         latency_seconds = perf_counter() - started_at
+        llm_metadata = agent.llm_client.last_call_metadata
+        tool_calls: list[ToolCallRecord] = []
+        if agent.rag_retriever is not None:
+            tool_status = "error" if retrieval.error else "success"
+            tool_calls.append(
+                ToolCallRecord(
+                    name="rag_retrieval",
+                    status=tool_status,
+                    latency_ms=round(retrieval.latency_seconds * 1000, 2),
+                    error_message=retrieval.error,
+                    metadata={
+                        "vector_db": retrieval.vector_db,
+                        "result_count": retrieval.count,
+                    },
+                )
+            )
         tracer.update_trace(
             trace,
             output_text=tutor_response,
@@ -483,12 +597,54 @@ def _chat_response(
             },
         )
         tracer.flush()
+        evaluation_service = EvaluationService(config)
+        evaluation_record = evaluation_service.evaluate_interaction(
+            request_id=request_id,
+            session_id=session_id,
+            input_text=user_text,
+            output_text=tutor_response,
+            expected_output=expected_output,
+            reference_context=reference_context,
+            model_name=config.ollama_model,
+            provider=llm_metadata.provider if llm_metadata is not None else "ollama",
+            task_type=task_type,
+            tags=tags,
+            latency_ms=round(latency_seconds * 1000, 2),
+            input_tokens=llm_metadata.input_tokens if llm_metadata is not None else None,
+            output_tokens=llm_metadata.output_tokens if llm_metadata is not None else None,
+            token_source=llm_metadata.token_source if llm_metadata is not None else None,
+            tool_calls=tool_calls,
+            task_success=task_success,
+            metadata={
+                "mode": mode,
+                "stt_model_name": stt_model_name,
+                "tts_enabled": enable_tts,
+                "tts_error": tts_error,
+                "retrieval_count": retrieval.count,
+                "retrieval_error": retrieval.error,
+                "request_source": "api",
+            },
+        )
+        evaluation_service.persist_interaction(evaluation_record)
+        if config.metrics_enabled and config.prometheus_enabled:
+            observe_evaluation_interaction(
+                task_type=task_type,
+                status=evaluation_record.workflow_status,
+                success=evaluation_record.metrics.task_success_rate == 1.0,
+            )
+            for tool_call in tool_calls:
+                observe_evaluation_tool_call(
+                    tool_name=tool_call.name,
+                    status=tool_call.status,
+                    latency_seconds=(tool_call.latency_ms or 0.0) / 1000 if tool_call.latency_ms is not None else None,
+                )
         log_event(
             logger,
             "chat_turn",
             config=config,
             model=config.ollama_model,
             mode=mode,
+            task_type=task_type,
             stt_model_name=stt_model_name,
             tts_enabled=enable_tts,
             tts_error=tts_error,
@@ -499,6 +655,7 @@ def _chat_response(
         )
 
     return ChatResponse(
+        request_id=request_id,
         session_id=session_id,
         mode=mode,
         model_name=config.ollama_model,
@@ -634,9 +791,148 @@ def _api_health(config: AppConfig) -> ApiHealthResponse:
         environment=config.observability_env,
         langfuse_enabled=config.langfuse_enabled,
         evidently_enabled=config.evidently_enabled,
+        evaluation_enabled=config.evaluation_enabled,
         metrics_enabled=config.metrics_enabled,
         prometheus_enabled=config.prometheus_enabled,
         grafana_enabled=config.grafana_enabled,
+    )
+
+
+def _safe_json(path: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _float_or_none(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_zero(value: object) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _latest_eval_run(config: AppConfig) -> ObservabilityRunSummary | None:
+    results_dir = config.evaluation_data_dir / "results"
+    if not results_dir.exists():
+        return None
+
+    candidates = sorted(results_dir.glob("eval_summary_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        payload = _safe_json(path)
+        if payload is None:
+            continue
+        try:
+            return ObservabilityRunSummary.model_validate(payload)
+        except Exception:
+            continue
+    return None
+
+
+def _observability_summary(config: AppConfig) -> ObservabilitySummaryResponse:
+    interactions_dir = config.evaluation_data_dir / "interactions"
+    records: list[dict[str, object]] = []
+    if interactions_dir.exists():
+        for path in sorted(interactions_dir.glob("*.json")):
+            payload = _safe_json(path)
+            if payload is not None:
+                records.append(payload)
+
+    total_interactions = len(records)
+    recent_cutoff = datetime.now(UTC).timestamp() - (24 * 60 * 60)
+    interactions_last_24h = 0
+    total_errors = 0
+    latencies: list[float] = []
+    feedback_scores: list[float] = []
+    tool_call_count = 0
+    tool_call_error_count = 0
+    task_success_values: list[float] = []
+    last_interaction_at: str | None = None
+
+    for record in records:
+        timestamp_value = record.get("timestamp")
+        if isinstance(timestamp_value, str):
+            if last_interaction_at is None or timestamp_value > last_interaction_at:
+                last_interaction_at = timestamp_value
+            try:
+                if datetime.fromisoformat(timestamp_value).timestamp() >= recent_cutoff:
+                    interactions_last_24h += 1
+            except ValueError:
+                pass
+
+        metrics = record.get("metrics")
+        metrics_dict = metrics if isinstance(metrics, dict) else {}
+        latency = _float_or_none(record.get("latency_ms"))
+        if latency is None:
+            latency = _float_or_none(metrics_dict.get("latency_ms"))
+        if latency is not None:
+            latencies.append(latency)
+
+        feedback_score = _float_or_none(metrics_dict.get("user_feedback_score"))
+        if feedback_score is None:
+            feedback_score = _float_or_none(record.get("user_feedback_score"))
+        if feedback_score is not None:
+            feedback_scores.append(feedback_score)
+
+        task_success = _float_or_none(metrics_dict.get("task_success_rate"))
+        if task_success is not None:
+            task_success_values.append(task_success)
+
+        error_message = record.get("error_message")
+        if isinstance(error_message, str) and error_message:
+            total_errors += 1
+
+        tool_calls = record.get("tool_calls")
+        if isinstance(tool_calls, list):
+            tool_call_count += len(tool_calls)
+            tool_call_error_count += sum(
+                1
+                for tool_call in tool_calls
+                if isinstance(tool_call, dict) and tool_call.get("status") == "error"
+            )
+        else:
+            tool_call_count += _int_or_zero(metrics_dict.get("tool_calls_count"))
+
+    average_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+    average_feedback_score = (
+        round(sum(feedback_scores) / len(feedback_scores), 2) if feedback_scores else None
+    )
+    task_success_rate = (
+        round(sum(task_success_values) / len(task_success_values), 4) if task_success_values else None
+    )
+
+    return ObservabilitySummaryResponse(
+        status="ok",
+        service=config.service_name,
+        environment=config.observability_env,
+        langfuse_enabled=config.langfuse_enabled,
+        langfuse_url=config.langfuse_public_url if config.langfuse_enabled else None,
+        evaluation_enabled=config.evaluation_enabled,
+        metrics_enabled=config.metrics_enabled,
+        prometheus_enabled=config.prometheus_enabled,
+        rag_enabled=config.rag_enabled,
+        total_interactions=total_interactions,
+        interactions_last_24h=interactions_last_24h,
+        total_errors=total_errors,
+        average_latency_ms=average_latency_ms,
+        average_feedback_score=average_feedback_score,
+        tool_call_count=tool_call_count,
+        tool_call_error_count=tool_call_error_count,
+        task_success_rate=task_success_rate,
+        last_interaction_at=last_interaction_at,
+        latest_run=_latest_eval_run(config),
     )
 
 
@@ -662,6 +958,11 @@ def get_observability_health() -> ObservabilityHealthResponse:
         stt_compute_type=config.stt_compute_type,
         piper_cuda=config.piper_cuda,
     )
+
+
+@app.get("/api/observability/summary", response_model=ObservabilitySummaryResponse)
+def get_observability_summary() -> ObservabilitySummaryResponse:
+    return _observability_summary(_load_config_or_500())
 
 
 @app.get("/api/metrics")
@@ -713,6 +1014,11 @@ def post_chat(request: ChatRequest) -> ChatResponse:
         user_text=user_text,
         stt_model_name="typed-input",
         enable_tts=request.enable_tts,
+        expected_output=request.expected_output,
+        reference_context=request.reference_context,
+        task_type=request.task_type,
+        tags=request.tags,
+        task_success=request.task_success,
     )
 
 
@@ -785,6 +1091,19 @@ def post_voice(
         enable_tts=enable_tts,
         pronunciation_feedback=transcription.pronunciation_feedback,
     )
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+def post_feedback(request: FeedbackRequest) -> FeedbackResponse:
+    config = _load_config_or_500()
+    path = EvaluationService(config).persist_feedback(
+        request_id=request.request_id,
+        score=request.score,
+        comment=request.comment,
+    )
+    if path is not None and config.metrics_enabled and config.prometheus_enabled:
+        observe_user_feedback(request.score)
+    return FeedbackResponse(request_id=request.request_id, saved=path is not None)
 
 
 @app.get("/api/audio/{filename}")
